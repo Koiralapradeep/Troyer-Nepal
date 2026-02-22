@@ -1,0 +1,16 @@
+# Backend
+backend/node_modules/
+backend/.env
+
+# Storage
+backend/src/storage/backups/
+backend/src/storage/uploads/
+
+# Frontend (if you later use build tools)
+frontend/node_modules/
+dist/
+build/
+
+# System
+.DS_Store
+Thumbs.db
