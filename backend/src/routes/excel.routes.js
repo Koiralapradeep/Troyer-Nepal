@@ -64,8 +64,13 @@ router.post("/rows", async (req, res) => {
 
 router.put("/rows/:id", async (req, res) => {
   try {
-    const { sheet } = req.query;
-    const item = await updateRow({ sheet, id: req.params.id, patch: req.body || {} });
+    const { sheet, key } = req.query;
+    const item = await updateRow({
+      sheet,
+      key,                
+      id: req.params.id,
+      patch: req.body || {},
+    });
     res.json({ ok: true, item });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });

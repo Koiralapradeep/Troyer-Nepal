@@ -704,16 +704,52 @@ export async function createRow({ sheet = "profiles", idPrefix, data = {} } = {}
   });
 }
 
-export async function updateRow({ sheet = "profiles", id, patch = {}, data } = {}) {
+export async function updateRow({ sheet = "profiles", id, key = "id", patch = {}, data } = {}) {
   return withWriteLock(async () => {
     const wb = await loadWorkbook();
     const ws = getSheetOrThrow(wb, sheet);
 
     prepareSheet(ws, sheet);
 
+    const payload = data ?? patch ?? {};
+    if (sheet === "Sites_List") {
+      const idx = headerIndexMapNormalized(ws);
+      const locCol = idx.get("location");
+      if (!locCol) throw new Error(`Sheet ${sheet} has no Location column`);
+
+      const last = ws.actualRowCount || ws.rowCount || 1;
+      let rowNumber = -1;
+
+      const target = normKey(id);
+      for (let r = 2; r <= last; r++) {
+        const v = text(cellToPlain(ws.getRow(r).getCell(locCol)));
+        if (normKey(v) === target) {
+          rowNumber = r;
+          break;
+        }
+      }
+
+      if (rowNumber === -1) throw new Error(`Location not found: ${id}`);
+      if (payload.Location && normKey(payload.Location) !== target) {
+        const newLoc = text(payload.Location);
+        if (!newLoc) throw new Error("Location is required");
+        if (findRowByLocation(ws, newLoc) !== -1) {
+          throw new Error(`Duplicate Location: ${newLoc}`);
+        }
+      }
+
+      setRowFromObject(ws, rowNumber, payload);
+      await atomicSave(wb);
+
+      const out = rowToObject(ws, rowNumber);
+      out.id = out.Location; 
+      return out;
+    }
+
+  
     const idx = headerIndexMapNormalized(ws);
-    const idCol = idx.get("id");
-    if (!idCol) throw new Error(`Sheet ${sheet} has no id column`);
+    const idCol = idx.get(normKey(key || "id"));
+    if (!idCol) throw new Error(`Sheet ${sheet} has no ${key || "id"} column`);
 
     const last = ws.actualRowCount || ws.rowCount || 1;
     let rowNumber = -1;
@@ -726,9 +762,8 @@ export async function updateRow({ sheet = "profiles", id, patch = {}, data } = {
       }
     }
 
-    if (rowNumber === -1) throw new Error(`Row not found for id: ${id}`);
+    if (rowNumber === -1) throw new Error(`Row not found for ${key || "id"}: ${id}`);
 
-    const payload = data ?? patch ?? {};
     setRowFromObject(ws, rowNumber, payload);
     await atomicSave(wb);
 

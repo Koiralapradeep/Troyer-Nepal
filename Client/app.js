@@ -31,6 +31,126 @@ const store = {
   allSites: [],
   allSchedule: [],
 };
+const SITE_STATUS_OPTIONS = ["Active", "Completed", "TBD"];
+
+// ================================================================
+// AUTH 
+// ================================================================
+function showLogin() {
+  const loginShell = document.getElementById("loginShell");
+  const appShell = document.getElementById("appShell");
+  if (loginShell) loginShell.style.display = "grid";
+  if (appShell) appShell.style.display = "none";
+  const btn = document.getElementById("btnLogout");
+  if (btn) btn.style.display = "none";
+}
+
+function showApp() {
+  const loginShell = document.getElementById("loginShell");
+  const appShell = document.getElementById("appShell");
+  if (loginShell) loginShell.style.display = "none";
+  if (appShell) appShell.style.display = "";
+  const btn = document.getElementById("btnLogout");
+  if (btn) btn.style.display = "";
+}
+
+async function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const res = await fetch(url, {
+    ...options,
+    headers,
+    credentials: "include",
+  });
+
+  if (res.status === 401) {
+    showLogin();
+  }
+  return res;
+}
+
+async function apiLogin(email, password) {
+  const res = await apiFetch(`${API}/auth/login`, {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) throw new Error(json.error || "Login failed");
+  return json;
+}
+
+async function apiLogout() {
+  await apiFetch(`${API}/auth/logout`, { method: "POST" }).catch(() => {});
+}
+
+async function apiMe() {
+  const res = await apiFetch(`${API}/auth/me`);
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) return null;
+  return json;
+}
+
+async function boot() {
+  const logoutBtn = document.getElementById("btnLogout");
+  if (logoutBtn) {
+    logoutBtn.onclick = async () => {
+      await apiLogout();
+      showLogin();
+      toast("info", "Logged out");
+    };
+  }
+
+  showLogin();
+
+const me = await apiMe();
+if (!me?.ok) {
+  window.location.href = "/login";
+  return;
+}
+
+  const form = document.getElementById("loginForm");
+  const err = document.getElementById("loginError");
+  const emailEl = document.getElementById("loginEmail");
+  const passEl = document.getElementById("loginPassword");
+
+  if (!form) return;
+
+  const setErr = (msg) => {
+    if (!err) return;
+    err.textContent = msg || "";
+    err.style.display = msg ? "" : "none";
+  };
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    setErr("");
+
+    const email = String(emailEl?.value || "").trim();
+    const password = String(passEl?.value || "");
+
+    if (!email || !password) {
+      setErr("Enter your email and password.");
+      return;
+    }
+
+    try {
+      await apiLogin(email, password);
+      showApp();
+      toast("success", "Welcome back");
+      await loadAllData();
+      const v = getViewFromHash() || DEFAULT_VIEW;
+      await navigate(v, { pushHash: true });
+    } catch (e) {
+      setErr(e.message || "Login failed");
+      toast("error", "Login failed", e.message || "");
+    }
+  });
+}
+
+document.addEventListener("DOMContentLoaded", boot);
 
 function findKey(obj, re) {
   return Object.keys(obj || {}).find((k) => re.test(String(k)));
@@ -142,6 +262,16 @@ function mountToaster() {
   wrap.id = "toastWrap";
   document.body.appendChild(wrap);
 }
+// ==============================
+// NAVIGATION
+// ==============================
+
+document.querySelectorAll(".nav-link").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const view = btn.dataset.view;
+    await setView(view);
+  });
+});
 
 function toast(type, message, sub = "", ttl = 2800) {
   mountToaster();
@@ -172,9 +302,10 @@ function toast(type, message, sub = "", ttl = 2800) {
   if (ttl > 0) setTimeout(remove, ttl);
 }
 
-// ================================================================
-// UI HELPERS (STATUS / SITE / EMPLOYEE DROPDOWNS)
-// ================================================================
+window.addEventListener("hashchange", () => {
+  const v = getViewFromHash() || DEFAULT_VIEW;
+  navigate(v, { pushHash: false });
+});
 
 function isStatusKey(key) {
   const k = String(key || "").toLowerCase();
@@ -183,9 +314,12 @@ function isStatusKey(key) {
 
 function statusBadgeHTML(value) {
   const raw = String(value ?? "").trim();
-  const v = raw.toLowerCase();
-
-  // map many possible inputs -> one standard class
+  const v = raw
+  .toLowerCase()
+  .replace(/\./g, "")  
+  .replace(/-/g, " ")       
+  .replace(/\s+/g, " ")     
+  .trim();
   const map = [
     {
       cls: "active",
@@ -205,6 +339,8 @@ function statusBadgeHTML(value) {
         "not-started",
         "todo",
         "to do",
+        "to be decided",
+        "tbd",
       ],
     },
     { cls: "hold", keys: ["on hold", "hold", "paused", "blocked", "stuck"] },
@@ -213,7 +349,6 @@ function statusBadgeHTML(value) {
       keys: ["cancelled", "canceled", "rejected", "failed", "stopped"],
     },
   ];
-
   const hit = map.find((m) => m.keys.includes(v));
   const cls = hit ? hit.cls : "unknown";
   const label = raw ? raw.replace(/\s+/g, " ").trim() : "Unknown";
@@ -281,17 +416,14 @@ function resolveEmployeeFromInput(inputText) {
 
   const employees = getEmployeesForPicker();
 
-  // Allow typing EMP-00001
   const byId = employees.find((e) => e.id.toLowerCase() === val.toLowerCase());
   if (byId) return byId;
 
-  // Match by exact name (case-insensitive)
   const byName = employees.find(
     (e) => e.name.toLowerCase() === val.toLowerCase(),
   );
   if (byName) return byName;
 
-  // loose contains match (first hit)
   const loose = employees.find((e) =>
     e.name.toLowerCase().includes(val.toLowerCase()),
   );
@@ -339,14 +471,17 @@ async function apiCreateRow(sheet, view, data) {
 }
 
 async function apiUpdateRow(sheet, id, patch) {
+  const key = sheet === "Sites_List" ? "Location" : "id";
+
   const res = await fetch(
-    `${API}/rows/${encodeURIComponent(id)}?sheet=${encodeURIComponent(sheet)}`,
+    `${API}/rows/${encodeURIComponent(id)}?sheet=${encodeURIComponent(sheet)}&key=${encodeURIComponent(key)}`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     },
   );
+
   const json = await res.json();
   if (!json.ok) throw new Error(json.error || "Update failed");
   return json.item;
@@ -446,6 +581,36 @@ async function loadAllData() {
     );
   }
 }
+const DEFAULT_VIEW = "overview";
+
+function isValidView(v) {
+  return Object.prototype.hasOwnProperty.call(views, v);
+}
+
+function getViewFromHash() {
+  const raw = (location.hash || "").replace("#", "").trim().toLowerCase();
+  return isValidView(raw) ? raw : null;
+}
+
+function setHashView(view) {
+  const v = isValidView(view) ? view : DEFAULT_VIEW;
+  // avoid adding duplicate history entries when already same
+  if (location.hash.replace("#", "") !== v) location.hash = `#${v}`;
+}
+
+function setActiveNav(view) {
+  document.querySelectorAll(".nav-link").forEach((b) => {
+    b.classList.toggle("active", b.dataset.view === view);
+  });
+}
+
+async function navigate(view, { pushHash = true } = {}) {
+  const v = isValidView(view) ? view : DEFAULT_VIEW;
+  store.view = v;
+  setActiveNav(v);
+  if (pushHash) setHashView(v);
+  await loadCurrentViewData();
+}
 
 async function loadCurrentViewData() {
   const sheet = SHEET_MAP[store.view];
@@ -456,7 +621,6 @@ async function loadCurrentViewData() {
   }
 
   const titleBase = views[store.view].title;
-  el("title").textContent = `${titleBase} (Loading…)`;
 
   try {
     let rows = await fetchAllRows(sheet);
@@ -469,12 +633,10 @@ async function loadCurrentViewData() {
     if (store.view === "schedule") store.allSchedule = rows;
     views[store.view].columns = inferColumnsFromData(rows, store.view);
 
-    el("title").textContent = titleBase;
     store.page = 1;
     render();
   } catch (err) {
     toast("error", "Failed to load current view", err.message);
-    el("title").textContent = titleBase;
   }
 }
 
@@ -741,7 +903,6 @@ function renderOverviewDashboard() {
   renderOverviewStats();
   renderPeoplePerProjectChart();
   renderResponsibilityChart();
-  renderScheduleProgressChart();
 
   const items = document.querySelectorAll(
     ".stat-card, .chart-card, .activity-item",
@@ -1561,12 +1722,9 @@ function renderTable() {
         })
         .join("");
 
-      // rowId logic (keep your existing behavior)
-      const rowId =
-        store.view === "sites"
-          ? row.Location || row.location || ""
-          : row.id || "";
-
+      const rowId = store.view === "sites"
+       ? row.Location || row.location || ""
+       : row.id || "";
       const actions = showActions
         ? `
 <td class="mono">
@@ -1601,28 +1759,38 @@ function renderPagination() {
 // ================================================================
 
 async function setView(view) {
-  localStorage.setItem("activeView", view);
+  if (!view) view = "overview";
+
+  // Update store
   store.view = view;
-  store.page = 1;
-  store.globalSearch = "";
-  store.columnFilters = {};
-  store.sortCol = null;
-  store.sortDir = "asc";
 
-  el("globalSearch").value = "";
-  el("advancedFilters").style.display = "none";
+  // Remove active class from all nav links
+  document.querySelectorAll(".nav-link").forEach((link) => {
+    link.classList.remove("active");
+  });
 
-  qsa(".nav-item").forEach((btn) =>
-    btn.classList.toggle("active", btn.dataset.view === view),
+  // Add active class to selected
+  const activeNav = document.querySelector(`.nav-link[data-view="${view}"]`);
+  if (activeNav) activeNav.classList.add("active");
+
+  // Hide all view sections
+  document.querySelectorAll(".view-section").forEach((section) => {
+    section.style.display = "none";
+  });
+
+  // Show current view section
+  const activeSection = document.getElementById(view);
+  if (activeSection) activeSection.style.display = "block";
+  localStorage.setItem("activeView", view);
+
+  history.replaceState(
+    null,
+    "",
+    `${location.pathname}${location.search}#${view}`,
   );
-  el("title").textContent = views[view].title;
 
-  if (view === "overview") {
-    render();
-  } else {
-    mountToolbarButtons();
-    await loadCurrentViewData();
-  }
+  // Load data for that page if needed
+  await loadCurrentViewData();
 }
 
 function applyFiltersFromPanel() {
@@ -1685,7 +1853,14 @@ function openFormModal(mode, rowId = null) {
 
   const currentRow =
     mode === "edit" && rowId
-      ? store.data.find((r) => String(r.id) === String(rowId)) || {}
+      ? (store.view === "sites"
+          ? store.data.find(
+              (r) =>
+                String(r.id || "").trim() === String(rowId).trim() ||
+                String(r.Location || r.location || "").trim().toLowerCase() ===
+                String(rowId).trim().toLowerCase()
+            )
+          : store.data.find((r) => String(r.id) === String(rowId))) || {}
       : {};
 
   formFields.className =
@@ -1759,7 +1934,6 @@ function openFormModal(mode, rowId = null) {
 
       const fullWidth = isTextArea;
 
-      // Engagements: Employee Name
       if (isEng && isEmployeeNameKey(k)) {
         return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
@@ -1790,7 +1964,6 @@ function openFormModal(mode, rowId = null) {
         </div>`;
       }
 
-      // Engagements: Site dropdown
       if (isEng && isSiteKey(k)) {
         const current = String(value || "").trim();
         return `
@@ -1809,7 +1982,6 @@ function openFormModal(mode, rowId = null) {
         </div>`;
       }
 
-      // Engagements: Status dropdown
       if (isEng && isStatusKey(k)) {
         const v = String(value || "")
           .trim()
@@ -1826,9 +1998,32 @@ function openFormModal(mode, rowId = null) {
         </div>`;
       }
 
-      // Schedule: Status dropdown
+      if (store.view === "sites" && isStatusKey(k)) {
+        const v = String(value || "")
+          .trim()
+          .toLowerCase();
+        const isSelected = (x) => v === String(x).toLowerCase();
+        return `
+        <div class="form-group ${fullWidth ? "full-width" : ""}">
+          <label class="form-label required" for="field_${esc(k)}">${esc(col.label)}</label>
+          <select id="field_${esc(k)}" name="${esc(k)}" class="form-select" required>
+            <option value="">Select status...</option>
+            ${SITE_STATUS_OPTIONS.map(
+              (opt) =>
+                `<option value="${esc(opt)}" ${isSelected(opt) ? "selected" : ""}>${esc(opt)}</option>`,
+            ).join("")}
+          </select>
+          <span class="form-error">This field is required</span>
+        </div>`;
+      }
+
       if (isSch && isStatusKey(k)) {
-        const v = String(value || "").trim().toLowerCase();
+        const v =
+          mode === "add"
+            ? "tbd"
+            : String(value || "")
+                .trim()
+                .toLowerCase();
         const isSelected = (x) => v === String(x).toLowerCase();
         return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
@@ -1845,48 +2040,40 @@ function openFormModal(mode, rowId = null) {
         </div>`;
       }
 
-      // Engagements: Start/End Date as calendar picker
       if (isEng && (isStartKey(k) || isEndKey(k))) {
         const iso = toISODateInput(value);
         const isEnd = isEndKey(k);
-
         return `
-  <div class="form-group ${fullWidth ? "full-width" : ""}">
-    <label class="form-label ${isEnd ? "" : "required"}" for="field_${esc(k)}">
-      ${esc(col.label)}
-    </label>
-    <input
-      type="date"
-      id="field_${esc(k)}"
-      name="${esc(k)}"
-      class="form-input"
-      value="${esc(iso)}"
-      ${isEnd ? "" : "required"}
-    />
-    ${isEnd ? "" : `<span class="form-error">This field is required</span>`}
-  </div>`;
+        <div class="form-group ${fullWidth ? "full-width" : ""}">
+          <label class="form-label ${isEnd ? "" : "required"}" for="field_${esc(k)}">${esc(col.label)}</label>
+          <input
+            type="date"
+            id="field_${esc(k)}"
+            name="${esc(k)}"
+            class="form-input"
+            value="${esc(iso)}"
+            ${isEnd ? "" : "required"}
+          />
+          ${isEnd ? "" : `<span class="form-error">This field is required</span>`}
+        </div>`;
       }
 
-      // Schedule: Start/End Date as calendar picker
       if (isSch && (isStartKey(k) || isEndKey(k))) {
         const iso = toISODateInput(value);
         const isEnd = isEndKey(k);
-
         return `
-  <div class="form-group ${fullWidth ? "full-width" : ""}">
-    <label class="form-label ${isEnd ? "" : "required"}" for="field_${esc(k)}">
-      ${esc(col.label)}
-    </label>
-    <input
-      type="date"
-      id="field_${esc(k)}"
-      name="${esc(k)}"
-      class="form-input"
-      value="${esc(iso)}"
-      ${isEnd ? "" : "required"}
-    />
-    ${isEnd ? "" : `<span class="form-error">This field is required</span>`}
-  </div>`;
+        <div class="form-group ${fullWidth ? "full-width" : ""}">
+          <label class="form-label ${isEnd ? "" : "required"}" for="field_${esc(k)}">${esc(col.label)}</label>
+          <input
+            type="date"
+            id="field_${esc(k)}"
+            name="${esc(k)}"
+            class="form-input"
+            value="${esc(iso)}"
+            ${isEnd ? "" : "required"}
+          />
+          ${isEnd ? "" : `<span class="form-error">This field is required</span>`}
+        </div>`;
       }
 
       if (isSch && isDurationKey(k)) {
@@ -1920,6 +2107,7 @@ function openFormModal(mode, rowId = null) {
           />
         </div>`;
       }
+
       if (isEng && isEmpIdKey(k)) {
         return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
@@ -1938,7 +2126,6 @@ function openFormModal(mode, rowId = null) {
         </div>`;
       }
 
-      // Generic date column
       if (col.type === "date") {
         const iso = toISODateInput(value);
         return `
@@ -1948,7 +2135,6 @@ function openFormModal(mode, rowId = null) {
         </div>`;
       }
 
-      // Number columns
       if (col.type === "number") {
         return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
@@ -1957,7 +2143,6 @@ function openFormModal(mode, rowId = null) {
         </div>`;
       }
 
-      // Textarea
       if (isTextArea) {
         return `
         <div class="form-group full-width">
@@ -1966,7 +2151,6 @@ function openFormModal(mode, rowId = null) {
         </div>`;
       }
 
-      // Default input
       const required =
         String(k).toLowerCase().includes("name") ||
         String(k).toLowerCase().includes("title");
@@ -2183,8 +2367,6 @@ function openFormModal(mode, rowId = null) {
       if (status !== "completed") recomputeDurationSch();
     }, 60000);
   }
-
-
   // focus first field
   setTimeout(() => {
     const first = formFields.querySelector("input, select, textarea");
@@ -2265,7 +2447,12 @@ async function handleFormSubmit(e) {
       await apiCreateRow(sheet, store.view, data);
       toast("success", "Record created successfully");
     } else {
-      await apiUpdateRow(sheet, currentFormId, data);
+      const updateId =
+      store.view === "sites"
+    ? (data.Location || data.location || currentFormId)
+    : currentFormId;
+
+    await apiUpdateRow(sheet, updateId, data);
       toast("success", "Record updated successfully");
     }
 
@@ -2285,9 +2472,9 @@ async function handleFormSubmit(e) {
 // ================================================================
 
 document.addEventListener("click", async (e) => {
-  const nav = e.target.closest(".nav-item");
-  if (nav && nav.dataset.view) {
-    await setView(nav.dataset.view);
+  const navBtn = e.target.closest(".nav-link");
+  if (navBtn && navBtn.dataset.view) {
+    await setView(navBtn.dataset.view);
     return;
   }
 
@@ -2348,13 +2535,6 @@ document.addEventListener("click", async (e) => {
     return;
   }
 });
-
-el("btnSidebar").addEventListener("click", () =>
-  document.body.classList.toggle("sidebar-open"),
-);
-el("sidebarOverlay").addEventListener("click", () =>
-  document.body.classList.remove("sidebar-open"),
-);
 
 let searchTimer;
 el("globalSearch").addEventListener("input", (e) => {
@@ -2426,8 +2606,42 @@ async function init() {
   mountToaster();
   await loadAllData();
   mountToolbarButtons();
-  const savedView = localStorage.getItem("activeView") || "overview";
-  await setView(savedView);
+  const initialView =
+    getViewFromHash() || localStorage.getItem("activeView") || DEFAULT_VIEW;
+  await setView(initialView);
 }
 
+// Run once when DOM is ready
+document.addEventListener("DOMContentLoaded", () => {
+  init().catch((err) => console.error("init failed:", err));
+});
+
 init();
+
+document.addEventListener("DOMContentLoaded", () => {
+
+  const btn = document.getElementById("profileBtn");
+  const menu = document.getElementById("profileMenu");
+  const logoutBtn = document.getElementById("logoutBtn");
+
+  if (!btn || !menu) return;
+
+  btn.addEventListener("click", () => {
+    menu.classList.toggle("show");
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!btn.contains(e.target) && !menu.contains(e.target)) {
+      menu.classList.remove("show");
+    }
+  });
+
+  logoutBtn?.addEventListener("click", async () => {
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include"
+    });
+    window.location.href = "/login";
+  });
+
+});

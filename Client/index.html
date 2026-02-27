@@ -9,10 +9,6 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 
     <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=DM+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
-    <link
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
@@ -23,128 +19,42 @@
 
   <body>
     <div class="app">
-      <aside class="sidebar" id="sidebar">
-        <div class="sidebar-inner">
-          <div class="brand">
-            <div class="logo-wrapper">
-              <img src="Loogo.png" alt="Troyer Nepal Logo" />
-            </div>
-            <div class="brand-text">
-              <div class="brand-name">Troyer Nepal</div>
-              <div class="brand-sub">Operations Dashboard</div>
-            </div>
-          </div>
-
-          <nav class="nav">
-            <div class="nav-section-label">Navigation</div>
-
-            <button class="nav-item active" data-view="overview">
-              <span class="nav-icon">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <rect x="1" y="1" width="6" height="6" rx="1.5" fill="currentColor" opacity=".9" />
-                  <rect x="9" y="1" width="6" height="6" rx="1.5" fill="currentColor" opacity=".4" />
-                  <rect x="1" y="9" width="6" height="6" rx="1.5" fill="currentColor" opacity=".4" />
-                  <rect x="9" y="9" width="6" height="6" rx="1.5" fill="currentColor" opacity=".4" />
-                </svg>
-              </span>
-              Overview
-            </button>
-
-            <button class="nav-item" data-view="employees">
-              <span class="nav-icon">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <circle cx="8" cy="5" r="3" fill="currentColor" opacity=".9" />
-                  <path
-                    d="M2 14c0-3.314 2.686-5 6-5s6 1.686 6 5"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                    opacity=".9"
-                  />
-                </svg>
-              </span>
-              Employees
-            </button>
-
-            <button class="nav-item" data-view="engagements">
-              <span class="nav-icon">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <path
-                    d="M2 12V5a1 1 0 011-1h10a1 1 0 011 1v7"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                  />
-                  <path d="M1 12h14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                  <path
-                    d="M5 8l2.5 2L11 6"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                </svg>
-              </span>
-              Engagements
-            </button>
-
-            <button class="nav-item" data-view="sites">
-              <span class="nav-icon">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <path
-                    d="M8 1.5C5.515 1.5 3.5 3.515 3.5 6c0 3.75 4.5 8.5 4.5 8.5s4.5-4.75 4.5-8.5C12.5 3.515 10.485 1.5 8 1.5z"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                  />
-                  <circle cx="8" cy="6" r="1.5" fill="currentColor" opacity=".8" />
-                </svg>
-              </span>
-              Sites
-            </button>
-
-            <button class="nav-item" data-view="schedule">
-              <span class="nav-icon">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <rect x="2" y="3" width="12" height="10" rx="2" stroke="currentColor" stroke-width="1.5" />
-                  <path
-                    d="M5 1.5v3M11 1.5v3M2 6h12"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                  />
-                </svg>
-              </span>
-              Schedule
-            </button>
-          </nav>
+      <header class="navbar">
+        <div class="nav-brand">
+          <img src="troyer-logo.svg" class="nav-logo" />
         </div>
-      </aside>
+      </header>
+      <div class="nav-tabs-wrap">
+        <nav class="nav-tabs">
+          <button class="nav-link" data-view="overview">Overview</button>
+          <button class="nav-link" data-view="employees">Employees</button>
+          <button class="nav-link" data-view="engagements">Engagements</button>
+          <button class="nav-link" data-view="sites">Sites</button>
+          <button class="nav-link" data-view="schedule">Schedule</button>
 
-      <div class="sidebar-overlay" id="sidebarOverlay"></div>
-
-      <main class="main">
-        <header class="topbar">
-          <div class="topbar-left">
-            <button class="btn-icon" id="btnSidebar" aria-label="Toggle sidebar">
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                <path d="M3 5h12M3 9h12M3 13h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-              </svg>
+          <div class="nav-profile">
+            <button id="profileBtn" class="profile-btn">
+              <span class="profile-arrow">▾</span>
             </button>
-            <h1 id="title" class="page-title">Dashboard Overview</h1>
-          </div>
 
-          <div class="topbar-right">
-            <div class="status-pill" id="statusPill">
-              <span class="status-dot"></span>
-              No data connected
+            <div id="profileMenu" class="profile-menu">
+              <button class="profile-item">Settings</button>
+              <button id="logoutBtn" class="profile-item logout" type="button">
+                Logout
+              </button>
             </div>
           </div>
-        </header>
-
+        </nav>
+      </div>
+      <main class="main">
         <section class="content">
           <div id="overviewView" style="display: none">
             <div class="overview-hero">
-              <img src="1752156704697.jpeg" alt="Troyer Nepal Banner" class="overview-hero-img" />
+              <img
+                src="werk_wiesen_08-1-e1635341273542.jpg.jpeg"
+                alt="Troyer Nepal Banner"
+                class="overview-hero-img"
+              />
             </div>
 
             <div id="overviewStats" class="stats-row"></div>
@@ -153,7 +63,9 @@
               <div class="chart-card">
                 <div class="chart-header">
                   <h3 class="chart-title">Workforce by Site</h3>
-                  <span class="chart-subtitle">Employees currently engaged</span>
+                  <span class="chart-subtitle"
+                    >Employees currently engaged</span
+                  >
                 </div>
                 <div class="chart-container">
                   <canvas id="sitesChart"></canvas>
@@ -172,14 +84,34 @@
             </div>
           </div>
 
+          <!-- ===========================
+               TABLE VIEW
+          ============================ -->
           <div id="tableView" style="display: none">
             <div id="stats" class="stats-row"></div>
 
             <div class="filter-bar" id="filterBar">
               <div class="filter-search-wrap">
-                <svg class="filter-search-icon" width="15" height="15" viewBox="0 0 15 15" fill="none">
-                  <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" stroke-width="1.4" />
-                  <path d="M10.5 10.5L13.5 13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+                <svg
+                  class="filter-search-icon"
+                  width="15"
+                  height="15"
+                  viewBox="0 0 15 15"
+                  fill="none"
+                >
+                  <circle
+                    cx="6.5"
+                    cy="6.5"
+                    r="4.5"
+                    stroke="currentColor"
+                    stroke-width="1.4"
+                  />
+                  <path
+                    d="M10.5 10.5L13.5 13.5"
+                    stroke="currentColor"
+                    stroke-width="1.4"
+                    stroke-linecap="round"
+                  />
                 </svg>
 
                 <input
@@ -191,9 +123,18 @@
                   spellcheck="false"
                 />
 
-                <button class="filter-clear-btn" id="clearSearch" aria-label="Clear search" style="display: none">
+                <button
+                  class="filter-clear-btn"
+                  id="clearSearch"
+                  style="display: none"
+                >
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <path d="M1 1l12 12M13 1L1 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                    <path
+                      d="M1 1l12 12M13 1L1 13"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="round"
+                    />
                   </svg>
                 </button>
               </div>
@@ -201,24 +142,44 @@
               <div class="filter-chips" id="filterChips"></div>
 
               <div class="filter-actions">
-                <button class="btn ghost btn-sm" id="btnClearAll" style="display: none">Clear all filters</button>
+                <button
+                  class="btn ghost btn-sm"
+                  id="btnClearAll"
+                  style="display: none"
+                >
+                  Clear all filters
+                </button>
 
                 <button class="btn ghost btn-sm" id="btnToggleFilters">
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <path d="M1 3h12M3 7h8M5 11h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-                  </svg>
                   Filters
-                  <span class="filter-count-badge" id="filterCountBadge" style="display: none"></span>
+                  <span
+                    class="filter-count-badge"
+                    id="filterCountBadge"
+                    style="display: none"
+                  ></span>
                 </button>
               </div>
             </div>
 
-            <div class="advanced-filters-panel" id="advancedFilters" style="display: none">
-              <div id="advancedFiltersInner" class="advanced-filters-grid"></div>
+            <div
+              class="advanced-filters-panel"
+              id="advancedFilters"
+              style="display: none"
+            >
+              <div
+                id="advancedFiltersInner"
+                class="advanced-filters-grid"
+              ></div>
               <div class="advanced-filters-footer">
-                <span class="advanced-filters-note">Filters apply across all visible columns</span>
-                <button class="btn ghost btn-sm" id="btnResetFilters">Reset</button>
-                <button class="btn primary btn-sm" id="btnApplyFilters">Apply</button>
+                <span class="advanced-filters-note">
+                  Filters apply across all visible columns
+                </span>
+                <button class="btn ghost btn-sm" id="btnResetFilters">
+                  Reset
+                </button>
+                <button class="btn primary btn-sm" id="btnApplyFilters">
+                  Apply
+                </button>
               </div>
             </div>
 
@@ -230,7 +191,9 @@
 
                 <div class="table-toolbar-right">
                   <div class="page-size-wrap">
-                    <label class="page-size-label" for="pageSizeSelect">Rows</label>
+                    <label class="page-size-label" for="pageSizeSelect"
+                      >Rows</label
+                    >
                     <select class="page-size-select" id="pageSizeSelect">
                       <option value="10">10</option>
                       <option value="25">25</option>
@@ -249,33 +212,14 @@
               </div>
 
               <div class="table-pagination" id="paginationBar">
-                <button class="pag-btn" id="btnPrevPage" disabled>
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <path
-                      d="M9 2L4 7l5 5"
-                      stroke="currentColor"
-                      stroke-width="1.5"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </button>
+                <button class="pag-btn" id="btnPrevPage" disabled>‹</button>
 
                 <span class="pag-info">
-                  Page <span id="pageNo">1</span> of <span id="pageTotal">1</span>
+                  Page <span id="pageNo">1</span> of
+                  <span id="pageTotal">1</span>
                 </span>
 
-                <button class="pag-btn" id="btnNextPage" disabled>
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                    <path
-                      d="M5 2l5 5-5 5"
-                      stroke="currentColor"
-                      stroke-width="1.5"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </button>
+                <button class="pag-btn" id="btnNextPage" disabled>›</button>
               </div>
             </div>
           </div>
@@ -283,22 +227,23 @@
       </main>
     </div>
 
+    <!-- ===========================
+         MODAL
+    ============================ -->
     <div class="modal-overlay" id="modalOverlay" style="display: none">
       <div class="modal-container">
         <div class="modal-header">
           <h2 class="modal-title" id="modalTitle">Add Record</h2>
-          <button class="modal-close" id="modalClose" aria-label="Close">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-              <path d="M4 4l10 10M14 4L4 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-            </svg>
-          </button>
+          <button class="modal-close" id="modalClose">×</button>
         </div>
 
         <div class="modal-body">
           <form id="modalForm" class="modal-form">
             <div id="formFields" class="form-fields"></div>
             <div class="form-actions">
-              <button type="button" class="btn ghost" id="btnCancelForm">Cancel</button>
+              <button type="button" class="btn ghost" id="btnCancelForm">
+                Cancel
+              </button>
               <button type="submit" class="btn primary" id="btnSubmitForm">
                 <span id="submitBtnText">Save</span>
               </button>
