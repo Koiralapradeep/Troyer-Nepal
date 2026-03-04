@@ -8,13 +8,13 @@ const SHEET_MAP = {
   engagements: "Engagements",
   sites: "Sites_List",
   schedule: "Seti_Updated",
+  gantt: "Seti_Updated",
 };
 
 const ID_PREFIX_MAP = {
   employees: "EMP",
   engagements: "ENG",
   sites: "SITE",
-  schedule: "SETI",
 };
 
 const store = {
@@ -34,7 +34,7 @@ const store = {
 const SITE_STATUS_OPTIONS = ["Active", "Completed", "TBD"];
 
 // ================================================================
-// AUTH 
+// AUTH
 // ================================================================
 function showLogin() {
   const loginShell = document.getElementById("loginShell");
@@ -56,7 +56,11 @@ function showApp() {
 
 async function apiFetch(url, options = {}) {
   const headers = new Headers(options.headers || {});
-  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+  if (
+    options.body &&
+    !(options.body instanceof FormData) &&
+    !headers.has("Content-Type")
+  ) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -105,11 +109,11 @@ async function boot() {
 
   showLogin();
 
-const me = await apiMe();
-if (!me?.ok) {
-  window.location.href = "/login";
-  return;
-}
+  const me = await apiMe();
+  if (!me?.ok) {
+    window.location.href = "/login";
+    return;
+  }
 
   const form = document.getElementById("loginForm");
   const err = document.getElementById("loginError");
@@ -204,6 +208,7 @@ const views = {
   engagements: { title: "Engagements", columns: [] },
   sites: { title: "Sites", columns: [] },
   schedule: { title: "Schedule", columns: [] },
+  gantt: { title: "Gantt", columns: [] },
 };
 
 let chartInstances = {};
@@ -219,6 +224,104 @@ const esc = (str) =>
     .replace(/"/g, "&quot;");
 
 let __toastMounted = false;
+
+function tableEls() {
+  const thead = document.getElementById("theadDefault");
+  const tbody = document.getElementById("tbodyDefault");
+  return { thead, tbody };
+}
+
+function applyViewLayout() {
+  const isOverview = store.view === "overview";
+  const isSchedule = store.view === "schedule";
+  const isGantt = store.view === "gantt";
+
+  const overviewView = document.getElementById("overviewView");
+  const tableView = document.getElementById("tableView");
+
+  const stats = document.getElementById("stats");
+  const filterBar = document.getElementById("filterBar");
+  const advancedFilters = document.getElementById("advancedFilters");
+  const paginationBar = document.getElementById("paginationBar");
+  const rowsWrap = document.querySelector(".page-size-wrap");
+
+  const scheduleHeader = document.getElementById("scheduleHeader");
+  const scheduleLayout = document.getElementById("scheduleLayout");
+  const defaultWrap = document.getElementById("defaultTableWrap");
+
+  const tableCard = document.querySelector("#tableView .table-card");
+
+  // main sections
+  if (overviewView) overviewView.style.display = isOverview ? "" : "none";
+  if (tableView) tableView.style.display = isOverview ? "none" : "";
+
+  // table card MUST stay visible for schedule + gantt (because scheduleLayout is inside it)
+  if (tableCard) tableCard.style.display = isOverview ? "none" : "";
+
+  // schedule header + layout visible for schedule and gantt
+  if (scheduleHeader) scheduleHeader.style.display = isSchedule ? "" : "none";
+  if (scheduleLayout)
+    scheduleLayout.style.display = isSchedule || isGantt ? "" : "none";
+
+  // default table visible only for non-schedule views
+  if (defaultWrap)
+    defaultWrap.style.display =
+      !isOverview && !isSchedule && !isGantt ? "" : "none";
+
+  // gantt page should be “full” -> hide filters/stats/pagination/rows selector
+  if (stats) stats.style.display = isGantt ? "none" : "";
+  if (filterBar) filterBar.style.display = isGantt ? "none" : "";
+  if (advancedFilters) advancedFilters.style.display = "none";
+  if (paginationBar) paginationBar.style.display = isGantt ? "none" : "";
+  if (rowsWrap) rowsWrap.style.display = isGantt ? "none" : "";
+}
+
+function mountScheduleGanttButton() {
+  const btn = document.getElementById("btnOpenGantt");
+  if (!btn) return;
+
+  btn.style.display = store.view === "schedule" ? "" : "none";
+  btn.onclick = async () => {
+    store.view = "gantt";
+    applyViewLayout();
+    await loadCurrentViewData();
+    await renderGanttPage();
+  };
+}
+
+function wireGanttControls() {
+  const back = document.getElementById("btnBackToSchedule");
+  if (back) {
+    back.onclick = async () => {
+      store.view = "schedule";
+      applyViewLayout();
+      await loadCurrentViewData();
+      await renderTableView();
+    };
+  }
+
+  const zoom = document.getElementById("ganttZoomSelect");
+  if (zoom) zoom.onchange = () => renderGanttPage();
+}
+
+function renderGanttPage() {
+  // Gantt uses the PDF-like sheet that mounts in #scheduleSheet
+  if (!store.allSchedule || !store.allSchedule.length) {
+    const mount = document.getElementById("scheduleSheet");
+    if (mount) {
+      mount.innerHTML = `
+        <div class="gantt-empty" style="padding:18px">
+          <div style="font-weight:900">No data available</div>
+          <div style="color:#60708a;margin-top:4px">Load schedule data first.</div>
+        </div>`;
+    }
+    return;
+  }
+  const zoomSel = document.getElementById("ganttZoom");
+  store.ganttCellW = Number(zoomSel?.value || store.ganttCellW || 22);
+
+  renderScheduleSheet();
+}
 
 function mountToaster() {
   if (__toastMounted) return;
@@ -315,11 +418,11 @@ function isStatusKey(key) {
 function statusBadgeHTML(value) {
   const raw = String(value ?? "").trim();
   const v = raw
-  .toLowerCase()
-  .replace(/\./g, "")  
-  .replace(/-/g, " ")       
-  .replace(/\s+/g, " ")     
-  .trim();
+    .toLowerCase()
+    .replace(/\./g, "")
+    .replace(/-/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   const map = [
     {
       cls: "active",
@@ -456,7 +559,7 @@ async function fetchAllRows(sheet) {
 }
 
 async function apiCreateRow(sheet, view, data) {
-  const idPrefix = ID_PREFIX_MAP[view] || "ROW";
+  const idPrefix = view === "schedule" ? "" : (ID_PREFIX_MAP[view] || "ROW");
   const res = await fetch(
     `${API}/rows?sheet=${encodeURIComponent(sheet)}&idPrefix=${encodeURIComponent(idPrefix)}`,
     {
@@ -496,24 +599,376 @@ async function apiDeleteRow(sheet, id) {
   if (!json.ok) throw new Error(json.error || "Delete failed");
   return true;
 }
+function renderGantt(container, rows, opts = {}) {
+  container.innerHTML = "";
 
-// ================================================================
-// DATA LOADING
-// ================================================================
+  const dayWidth = Number(opts.dayW || 18);
+  const rowHeight = 38;
+  const padDays = Number(opts.padDays ?? 14);
+
+  const startOfDay = (d) => {
+    const x = new Date(d);
+    x.setHours(0, 0, 0, 0);
+    return x;
+  };
+
+  const parse = (v) => {
+    if (!v) return null;
+    const d = new Date(v);
+    return isNaN(d) ? null : startOfDay(d);
+  };
+
+  const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+
+  const toISO = (d) => d.toISOString().slice(0, 10);
+
+  // ISO week number (to match PDF style W4, W5...)
+  const isoWeek = (date) => {
+    const d = new Date(
+      Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
+    );
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    return Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+  };
+
+  const tasks = (Array.isArray(rows) ? rows : [])
+    .map((r, i) => {
+      const s = parse(r.Start);
+      const f = parse(r.Finish);
+      const durStr = String(r.Duration ?? "");
+      const pct =
+        parseFloat(String(r["% Complete"] ?? 0).replace("%", "")) || 0;
+
+      // milestone if start==finish AND duration looks like 0 days (safe)
+      const isMilestone = !!(s && f && +s === +f && /\b0\b/.test(durStr));
+
+      // summary heuristic (optional)
+      const name = String(r["Task Name"] ?? "");
+      const isSummary = /scope|project|procurement|design|powerhouse/i.test(
+        name,
+      );
+
+      return {
+        id: r.ID || i + 1,
+        name,
+        start: s,
+        finish: f,
+        pct: clamp(pct, 0, 100),
+        duration: durStr,
+        predecessors: r.Predecessors || "",
+        isSummary,
+        isMilestone,
+      };
+    })
+    .filter((t) => t.start && t.finish);
+
+  if (!tasks.length) {
+    container.innerHTML =
+      "<div style='padding:18px;font-weight:800'>No schedule data</div>";
+    return;
+  }
+
+  // range
+  let min = tasks.reduce((a, b) => (a < b.start ? a : b.start), tasks[0].start);
+  let max = tasks.reduce(
+    (a, b) => (a > b.finish ? a : b.finish),
+    tasks[0].finish,
+  );
+
+  min = new Date(min);
+  min.setDate(min.getDate() - padDays);
+  min = startOfDay(min);
+
+  max = new Date(max);
+  max.setDate(max.getDate() + padDays);
+  max = startOfDay(max);
+
+  const totalDays = Math.max(1, Math.ceil((max - min) / 86400000) + 1);
+  const timelineWidth = totalDays * dayWidth;
+
+  const addDays = (d, n) => {
+    const x = new Date(d);
+    x.setDate(x.getDate() + n);
+    return x;
+  };
+
+  // --- wrapper
+  const wrap = document.createElement("div");
+  wrap.className = "gantt-container";
+
+  // ================= LEFT TABLE =================
+  const left = document.createElement("div");
+  left.className = "gantt-left";
+
+  left.innerHTML = `
+    <div class="gantt-left-head">
+      <div>ID</div>
+      <div>Task Name</div>
+      <div>Start</div>
+      <div>Finish</div>
+      <div>%</div>
+    </div>
+  `;
+
+  const leftBody = document.createElement("div");
+  leftBody.className = "gantt-left-body";
+
+  tasks.forEach((t) => {
+    const row = document.createElement("div");
+    row.className = "gantt-left-row";
+    row.style.height = rowHeight + "px";
+
+    row.innerHTML = `
+      <div>${t.id}</div>
+      <div class="gantt-taskname">${t.name}</div>
+      <div>${toISO(t.start)}</div>
+      <div>${toISO(t.finish)}</div>
+      <div>${Math.round(t.pct)}%</div>
+    `;
+    leftBody.appendChild(row);
+  });
+
+  left.appendChild(leftBody);
+
+  // ================= RIGHT SIDE =================
+  const rightOuter = document.createElement("div");
+  rightOuter.className = "gantt-right-outer";
+
+  // --- sticky timeline header (YEAR + WEEKS)
+  const head = document.createElement("div");
+  head.className = "gantt-right-head";
+
+  // YEAR row (like PDF “2025”)
+  const yearsRow = document.createElement("div");
+  yearsRow.className = "gantt-head-years";
+  yearsRow.style.width = timelineWidth + "px";
+
+  // WEEKS row (W4, W5...)
+  const weeksRow = document.createElement("div");
+  weeksRow.className = "gantt-head-weeks";
+  weeksRow.style.width = timelineWidth + "px";
+
+  // Build year blocks (accurate across multiple years)
+  let yCursor = new Date(min.getFullYear(), 0, 1);
+  yCursor = startOfDay(yCursor);
+
+  while (yCursor <= max) {
+    const yStart = yCursor < min ? min : yCursor;
+    const nextYear = new Date(yCursor.getFullYear() + 1, 0, 1);
+    const yEnd = nextYear > max ? max : addDays(nextYear, -1);
+
+    const startOffset = Math.max(0, Math.floor((yStart - min) / 86400000));
+    const endOffset = Math.min(
+      totalDays,
+      Math.floor((yEnd - min) / 86400000) + 1,
+    );
+
+    const w = Math.max(1, (endOffset - startOffset) * dayWidth);
+
+    const cell = document.createElement("div");
+    cell.className = "gantt-year-cell";
+    cell.style.width = w + "px";
+    cell.textContent = `${yStart.getFullYear()}`;
+    yearsRow.appendChild(cell);
+
+    yCursor = nextYear;
+  }
+
+  // Build ISO week labels every 7 days
+  for (let d = 0; d < totalDays; d += 7) {
+    const dt = addDays(min, d);
+    const wk = isoWeek(dt);
+
+    const cell = document.createElement("div");
+    cell.className = "gantt-week-cell";
+    cell.style.width = 7 * dayWidth + "px";
+    cell.textContent = `W${wk}`;
+    weeksRow.appendChild(cell);
+  }
+
+  head.appendChild(yearsRow);
+  head.appendChild(weeksRow);
+
+  // --- scrollable timeline body
+  const right = document.createElement("div");
+  right.className = "gantt-right";
+  right.style.width = timelineWidth + "px";
+
+  // grid lines (daily thin, weekly stronger)
+  const grid = document.createElement("div");
+  grid.className = "gantt-grid";
+  grid.style.width = timelineWidth + "px";
+
+  for (let d = 0; d < totalDays; d++) {
+    const line = document.createElement("div");
+    line.className = "gantt-grid-line" + (d % 7 === 0 ? " week" : "");
+    line.style.left = d * dayWidth + "px";
+    grid.appendChild(line);
+  }
+
+  right.appendChild(grid);
+
+  // today line
+  const today = startOfDay(new Date());
+  if (today >= min && today <= max) {
+    const offset = Math.floor((today - min) / 86400000);
+    const tline = document.createElement("div");
+    tline.className = "gantt-today-line";
+    tline.style.left = offset * dayWidth + "px";
+    right.appendChild(tline);
+  }
+
+  // bars
+  tasks.forEach((t, i) => {
+    const offset = Math.floor((t.start - min) / 86400000);
+    const duration = Math.max(
+      1,
+      Math.floor((t.finish - t.start) / 86400000) + 1,
+    );
+
+    const top = i * rowHeight + 10;
+
+    if (t.isMilestone) {
+      const m = document.createElement("div");
+      m.className = "gantt-milestone";
+      m.style.top = top + 2 + "px";
+      m.style.left = offset * dayWidth + "px";
+      right.appendChild(m);
+      return;
+    }
+
+    const bar = document.createElement("div");
+    bar.className = "gantt-bar" + (t.isSummary ? " summary" : "");
+    bar.style.top = top + "px";
+    bar.style.left = offset * dayWidth + "px";
+    bar.style.width = duration * dayWidth + "px";
+
+    const prog = document.createElement("div");
+    prog.className = "gantt-progress";
+    prog.style.width = `${t.pct}%`;
+
+    const label = document.createElement("div");
+    label.className = "gantt-bar-label";
+    label.textContent = t.name;
+
+    bar.appendChild(prog);
+    bar.appendChild(label);
+    right.appendChild(bar);
+  });
+
+  // legend
+  const legend = document.createElement("div");
+  legend.className = "gantt-legend";
+  legend.innerHTML = `
+    <div class="gl-item"><span class="gl-swatch bar"></span>Task</div>
+    <div class="gl-item"><span class="gl-swatch summary"></span>Summary</div>
+    <div class="gl-item"><span class="gl-swatch milestone"></span>Milestone</div>
+    <div class="gl-item"><span class="gl-swatch progress"></span>Progress</div>
+    <div class="gl-item"><span class="gl-swatch today"></span>Today</div>
+  `;
+
+  // assemble right side
+  rightOuter.appendChild(head);
+
+  const bodyWrap = document.createElement("div");
+  bodyWrap.className = "gantt-right-bodywrap";
+  bodyWrap.appendChild(right);
+
+  rightOuter.appendChild(bodyWrap);
+  rightOuter.appendChild(legend);
+
+  wrap.appendChild(left);
+  wrap.appendChild(rightOuter);
+  container.appendChild(wrap);
+
+  bodyWrap.addEventListener("scroll", () => {
+    leftBody.scrollTop = bodyWrap.scrollTop;
+    head.scrollLeft = bodyWrap.scrollLeft;
+  });
+}
 
 function inferColumnsFromData(rows, viewName) {
   const first = rows[0] || {};
+  if (viewName === "schedule") {
+    const keys = Object.keys(first || {});
+    const find = (re) => keys.find((k) => re.test(String(k))) || null;
+
+    const kID = find(/^id$/i) || "ID";
+    const kMode = find(/task\s*mode/i) || "Task Mode";
+    const kPct = find(/%\s*complete/i) || "% Complete";
+    const kName = find(/task\s*name/i) || "Task Name";
+    const kDur = find(/^duration/i) || "Duration";
+    const kStart = find(/^start$/i) || "Start";
+    const kFinish = find(/^finish$/i) || "Finish";
+    const kPred = find(/predecess/i) || "Predecessors";
+
+    return [
+      {
+        key: kID,
+        label: "ID",
+        type: "number",
+        filterable: true,
+        sortable: true,
+      },
+      {
+        key: kMode,
+        label: "Task Mode",
+        type: "text",
+        filterable: true,
+        sortable: true,
+      },
+      {
+        key: kPct,
+        label: "% Complete",
+        type: "number",
+        filterable: true,
+        sortable: true,
+      },
+      {
+        key: kName,
+        label: "Task Name",
+        type: "text",
+        filterable: true,
+        sortable: true,
+      },
+      {
+        key: kDur,
+        label: "Duration",
+        type: "text",
+        filterable: true,
+        sortable: true,
+      },
+      {
+        key: kStart,
+        label: "Start",
+        type: "date",
+        filterable: true,
+        sortable: true,
+      },
+      {
+        key: kFinish,
+        label: "Finish",
+        type: "date",
+        filterable: true,
+        sortable: true,
+      },
+      {
+        key: kPred,
+        label: "Predecessors",
+        type: "text",
+        filterable: true,
+        sortable: true,
+      },
+    ];
+  }
 
   return Object.keys(first)
     .filter((key) => {
       const lower = key.toLowerCase();
-
-      // Hide ID for Sites (already there)
       if (viewName === "sites" && lower === "id") return false;
-
-      // 🚀 Hide ID for Schedule (Seti_Updated)
-      if (viewName === "schedule" && lower === "id") return false;
-
+      if (viewName === "schedule" && isStatusKey(key)) return false;
       return true;
     })
     .map((key) => {
@@ -533,6 +988,106 @@ function inferColumnsFromData(rows, viewName) {
         sortable: true,
       };
     });
+}
+
+function generateTaskMode(row) {
+  const name = String(row["Task Name"] ?? row["TASK NAME"] ?? "").trim();
+  const start = row["Start"] ?? row["START"];
+  const finish = row["Finish"] ?? row["FINISH"];
+
+  const durRaw =
+    row["Duration (days)"] ??
+    row["Duration"] ??
+    row["DURATION (DAYS)"] ??
+    row["DURATION"];
+
+  const durNum = toNum(durRaw);
+  const dur = durNum != null ? durNum : calcDurationDays(start, finish);
+
+  // If it looks like a heading/section row (common in schedules)
+  if (name && !start && !finish && (dur === "" || dur === 0)) {
+    return "Summary";
+  }
+
+  // Milestone: 0-day duration OR same start & finish
+  const s = toDateOnly(start);
+  const f = toDateOnly(finish);
+  if (dur === 0 || (s && f && s.getTime() === f.getTime())) {
+    return "Milestone";
+  }
+
+  // If no dates at all but has a name
+  if (name && !start && !finish) {
+    return "Task";
+  }
+
+  return "Task";
+}
+function toDateOnly(v) {
+  if (!v) return null;
+  const d = v instanceof Date ? v : new Date(v);
+  if (isNaN(d.getTime())) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function calcDurationDays(start, finish) {
+  const s = toDateOnly(start);
+  const f = toDateOnly(finish);
+  if (!s || !f) return "";
+  return Math.max(0, Math.round((f - s) / 86400000));
+}
+
+function getScheduleField(row, names) {
+  for (const n of names) {
+    if (row[n] != null && String(row[n]).trim() !== "") return row[n];
+  }
+  return row[names[0]]; // fallback
+}
+
+function generateTaskMode(row) {
+  const name = String(
+    getScheduleField(row, ["Task Name", "TASK NAME"]) ?? "",
+  ).trim();
+  const start = getScheduleField(row, [
+    "Start",
+    "START",
+    "Start Date",
+    "START DATE",
+  ]);
+  const finish = getScheduleField(row, [
+    "Finish",
+    "FINISH",
+    "Finish Date",
+    "FINISH DATE",
+  ]);
+  const durRaw = getScheduleField(row, [
+    "Duration (days)",
+    "Duration",
+    "DURATION (DAYS)",
+    "DURATION",
+  ]);
+
+  const durNum = Number(String(durRaw ?? "").trim());
+  const dur = Number.isFinite(durNum)
+    ? durNum
+    : calcDurationDays(start, finish);
+
+  // "Summary" heuristic (group/header row)
+  if (name && !start && !finish && (dur === "" || dur === 0)) return "Summary";
+
+  const s = toDateOnly(start);
+  const f = toDateOnly(finish);
+
+  // milestone: 0 duration OR same day
+  if (dur === 0 || (s && f && s.getTime() === f.getTime())) return "Milestone";
+
+  return "Task";
+}
+
+function clamp01(n) {
+  n = Number(n);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
 }
 
 async function loadAllData() {
@@ -609,7 +1164,10 @@ async function navigate(view, { pushHash = true } = {}) {
   store.view = v;
   setActiveNav(v);
   if (pushHash) setHashView(v);
+
+  applyViewLayout();
   await loadCurrentViewData();
+  if (store.view === "gantt") await renderGanttPage();
 }
 
 async function loadCurrentViewData() {
@@ -624,13 +1182,16 @@ async function loadCurrentViewData() {
 
   try {
     let rows = await fetchAllRows(sheet);
-    if (store.view === "schedule") rows = rows.map(computeScheduleFields);
+    if (store.view === "schedule" || store.view === "gantt") {
+      rows = rows.map(computeScheduleFields);
+    }
     store.data = rows;
 
     if (store.view === "employees") store.allEmployees = rows;
     if (store.view === "engagements") store.allEngagements = rows;
     if (store.view === "sites") store.allSites = rows;
-    if (store.view === "schedule") store.allSchedule = rows;
+    if (store.view === "schedule" || store.view === "gantt")
+      store.allSchedule = rows;
     views[store.view].columns = inferColumnsFromData(rows, store.view);
 
     store.page = 1;
@@ -796,72 +1357,558 @@ function computeScheduleFields(row) {
   const obj = { ...(row || {}) };
   const keys = Object.keys(obj);
 
-  // Detect fields
-  const startKey =
-    keys.find((k) => /starting\s*date/i.test(k)) ||
-    keys.find((k) => /start\s*date/i.test(k)) ||
-    keys.find((k) => /start/i.test(k) && /date/i.test(k)) ||
-    keys.find((k) => /^date$/i.test(k)) ||
-    null;
-
-  const endKey =
-    keys.find((k) => /end\s*date/i.test(k)) ||
-    keys.find((k) => /ending\s*date/i.test(k)) ||
-    keys.find((k) => /end/i.test(k) && /date/i.test(k)) ||
-    null;
+  const startKey = keys.find((k) => /^start$/i.test(k)) || "Start";
+  const finishKey = keys.find((k) => /^finish$/i.test(k)) || "Finish";
 
   const durationKey =
-    keys.find((k) => /duration/i.test(k)) || "Duration (Days)";
+    keys.find((k) => /^duration\s*\(days\)$/i.test(k)) ||
+    keys.find((k) => /^duration/i.test(k)) ||
+    "Duration (days)";
 
-  const statusKey = keys.find((k) => /status|phase/i.test(k)) || "status";
+  const taskModeKey = keys.find((k) => /^task\s*mode$/i.test(k)) || "Task Mode";
 
-  const groupKey = keys.find((k) => /group/i.test(k)) || null;
+  const startVal = obj[startKey];
+  const finishVal = obj[finishKey];
 
-  // Parse dates
-  const start = startKey ? parseAnyDate(obj[startKey]) : null;
-  const end = endKey ? parseAnyDate(obj[endKey]) : null;
+  // Auto duration if blank
+  const rawDur = obj[durationKey];
+  if (String(rawDur ?? "").trim() === "") {
+    obj[durationKey] = calcDurationDays(startVal, finishVal);
+  }
 
-  // Normalize date display (short yyyy-mm-dd)
-  if (startKey)
-    obj[startKey] = start
-      ? toISODate(start)
-      : obj[startKey]
-        ? String(obj[startKey]).slice(0, 10)
-        : "";
-
-  if (endKey) obj[endKey] = end ? toISODate(end) : "";
-
-  const today = startOfDay(new Date());
-
-  // Calculate duration
-  const duration = start
-    ? end
-      ? daysInclusive(start, end)
-      : daysInclusive(start, today)
-    : "";
-
-  obj[durationKey] = duration === "" ? "" : String(duration);
-
-  const hasGroup = groupKey && String(obj[groupKey] ?? "").trim() !== "";
-
-  if (!hasGroup) {
-    obj[statusKey] = "";
-  } else {
-    obj[statusKey] = end ? "Completed" : start ? "Active" : "";
+  // Generate Task Mode if blank
+  const rawTM = obj[taskModeKey];
+  if (String(rawTM ?? "").trim() === "") {
+    obj[taskModeKey] = generateTaskMode(obj);
   }
 
   return obj;
 }
+
+function toDateOnly(v) {
+  const d = v instanceof Date ? v : new Date(v);
+  if (isNaN(d.getTime())) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function calcDurationDays(start, finish) {
+  const s = toDateOnly(start);
+  const f = toDateOnly(finish);
+  if (!s || !f) return "";
+  return Math.max(0, Math.round((f - s) / 86400000));
+}
+
+function toNum(v) {
+  const n = Number(String(v ?? "").trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+function calcDurationDays(start, finish) {
+  const s = new Date(start);
+  const f = new Date(finish);
+  if (isNaN(s.getTime()) || isNaN(f.getTime())) return "";
+
+  const s0 = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+  const f0 = new Date(f.getFullYear(), f.getMonth(), f.getDate());
+  return Math.max(0, Math.round((f0 - s0) / 86400000));
+}
+function formatDateMDY(v) {
+  if (v == null || v === "") return "";
+
+  if (v instanceof Date && !isNaN(v.getTime())) {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+    }).format(v);
+  }
+
+  const s = String(v).trim();
+  if (!s) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [yy, mm, dd] = s.split("-").map(Number);
+    const d = new Date(yy, mm - 1, dd);
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+    }).format(d);
+  }
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      return new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "2-digit",
+        year: "numeric",
+      }).format(d);
+    }
+  }
+
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+    }).format(d);
+  }
+  return s;
+}
 // ================================================================
 // RENDER MAIN
 // ================================================================
+function formatDatePDF(v) {
+  const d = parseAnyDate(v);
+  if (!d) return "";
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = String(d.getFullYear()).slice(-2);
+  return `${days[d.getDay()]} ${dd}-${mm}-${yy}`;
+}
+
+function formatSchedulePercent(v) {
+  if (v == null || v === "") return "";
+  const n = Number(String(v).replace(/[^\d.]/g, ""));
+  if (isNaN(n)) return String(v);
+  const pct = n <= 1 ? Math.round(n * 100) : Math.round(n);
+  return `${pct}%`;
+}
+
+function formatScheduleDuration(v, start, finish) {
+  if (v != null && String(v).trim() !== "") {
+    const s = String(v).trim();
+    if (/day/i.test(s)) return s;
+    const n = Number(s.replace(/[^\d.]/g, ""));
+    if (!isNaN(n)) return `${n} days`;
+    return s;
+  }
+  const d = calcDurationDays(start, finish);
+  if (d == null) return "";
+  return `${d} days`;
+}
+
+function scheduleNameCellHTML(row) {
+  const nameKey =
+    Object.keys(row || {}).find((k) => /task\s*name/i.test(k)) || "Task Name";
+  const modeKey =
+    Object.keys(row || {}).find((k) => /task\s*mode/i.test(k)) || "Task Mode";
+  const name = String(row[nameKey] ?? "").trim();
+  const mode = String(row[modeKey] ?? "").trim();
+
+  const isSummary =
+    /summary/i.test(mode) ||
+    /project\s*summary/i.test(mode) ||
+    /^upper\s*myagdi/i.test(name);
+  const leading = (String(row[nameKey] ?? "").match(/^(\s+)/) || [])[1] || "";
+  const indent = Math.min(3, Math.floor(leading.length / 2));
+
+  return `<span class="sch-name ${isSummary ? "is-summary" : ""}" style="--indent:${indent}">${esc(name)}</span>`;
+}
+
+// ================================================================
+// SCHEDULE SHEET (PDF-like table + gantt in ONE scroller)
+// ================================================================
+
+function startOfWeekMonday(d) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const day = x.getDay(); // 0 Sun .. 6 Sat
+  const diff = day === 0 ? -6 : 1 - day;
+  x.setDate(x.getDate() + diff);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function addDays(d, n) {
+  const x = new Date(d.getTime());
+  x.setDate(x.getDate() + n);
+  return x;
+}
+
+function daysBetween(a, b) {
+  const a0 = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+  const b0 = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((b0 - a0) / 86400000);
+}
+
+function safeIdFromRow(row) {
+  return (
+    row?.id ??
+    row?.ID ??
+    row?.Id ??
+    row?.["ID "] ??
+    row?.[findKey(row, /^id$/i) || ""] ??
+    ""
+  );
+}
+
+function scheduleKeysFromRow(sample) {
+  const k = (re, fallback) => findKey(sample, re) || fallback;
+
+  return {
+    id: k(/^id$/i, "ID"),
+    taskMode: k(/^task\s*mode$/i, "Task Mode"),
+    pct: k(/^%?\s*complete$/i, "% Complete"),
+    taskName: k(/task\s*name/i, "Task Name"),
+    duration: k(/^duration/i, "Duration"),
+    start: k(/^start$/i, "Start"),
+    finish: k(/^finish$/i, "Finish"),
+    pred: k(/^predecessors?/i, "Predecessors"),
+  };
+}
+
+function parseAnyDateSched(v) {
+  if (v == null || v === "") return null;
+  if (v instanceof Date && !isNaN(v.getTime())) return v;
+  const s = String(v).trim();
+  if (!s) return null;
+
+  // Already ISO
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [yy, mm, dd] = s.split("-").map(Number);
+    const d = new Date(yy, mm - 1, dd);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  // "Thu 17-07-25"
+  const m = s.match(/^[A-Za-z]{3}\s+(\d{2})-(\d{2})-(\d{2})$/);
+  if (m) {
+    const dd = Number(m[1]);
+    const mm = Number(m[2]);
+    const yy = 2000 + Number(m[3]);
+    const d = new Date(yy, mm - 1, dd);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function renderScheduleSheet() {
+  const mount = el("scheduleSheet");
+  if (!mount) return;
+
+  const isFullGantt = store.view === "gantt";
+
+  // Pull schedule rows even on the dedicated Gantt page
+  const __prevView = store.view;
+  const __prevData = store.data;
+  store.view = "schedule";
+  store.data = (store.allSchedule || []).slice();
+  const rows = deriveRows(); // filtered + sorted using Schedule rules
+  store.view = __prevView;
+  store.data = __prevData;
+  el("rowCount").textContent = rows.length.toLocaleString();
+
+  if (!rows.length) {
+    mount.innerHTML = `<div class="gantt-empty">No schedule records</div>`;
+    return;
+  }
+
+  const sample = rows[0] || {};
+  const keys = scheduleKeysFromRow(sample);
+
+  // Timeline range (PDF-like: start a bit earlier, end a bit later)
+  let minStart = null;
+  let maxFinish = null;
+
+  for (const r of rows) {
+    const s = parseAnyDateSched(r[keys.start]);
+    const f = parseAnyDateSched(r[keys.finish]);
+    if (s && (!minStart || s < minStart)) minStart = s;
+    if (f && (!maxFinish || f > maxFinish)) maxFinish = f;
+  }
+
+  if (!minStart || !maxFinish) {
+    mount.innerHTML = `<div class="gantt-empty">No schedule dates found</div>`;
+    return;
+  }
+
+  const timelineStart = startOfWeekMonday(addDays(minStart, -56)); // -8 weeks
+  const timelineEnd = startOfWeekMonday(addDays(maxFinish, 28)); // +4 weeks
+  const weeks = [];
+  for (let d = new Date(timelineStart); d <= timelineEnd; d = addDays(d, 7)) {
+    weeks.push(new Date(d));
+  }
+
+  const cellW = store.ganttCellW || 22;
+  const ganttWidth = weeks.length * cellW;
+
+  // Build year spans
+  const yearSpans = [];
+  let curYear = weeks[0].getFullYear();
+  let spanStart = 0;
+  for (let i = 0; i < weeks.length; i++) {
+    const y = weeks[i].getFullYear();
+    if (y !== curYear) {
+      yearSpans.push({ year: curYear, from: spanStart, to: i });
+      curYear = y;
+      spanStart = i;
+    }
+  }
+  yearSpans.push({ year: curYear, from: spanStart, to: weeks.length });
+
+  const weekLabels = weeks.map((_, i) => `W${i - 8}`);
+
+  // Sticky left column widths (match PDF vibe)
+  const leftCols = isFullGantt
+    ? [
+        { key: keys.id, label: "ID", w: 64, cls: "mono" },
+        { key: keys.taskName, label: "TASK NAME", w: 460, cls: "sch-task" },
+        { key: keys.start, label: "START", w: 130, cls: "mono" },
+        { key: keys.finish, label: "FINISH", w: 130, cls: "mono" },
+      ]
+    : [
+        { key: keys.id, label: "ID", w: 60, cls: "mono" },
+        { key: keys.taskMode, label: "TASK MODE", w: 120, cls: "" },
+        { key: keys.pct, label: "% COMPLETE", w: 110, cls: "mono sch-pct" },
+        { key: keys.taskName, label: "TASK NAME", w: 360, cls: "sch-task" },
+        { key: keys.duration, label: "DURATION", w: 120, cls: "mono" },
+        { key: keys.start, label: "START", w: 120, cls: "mono" },
+        { key: keys.finish, label: "FINISH", w: 120, cls: "mono" },
+        { key: keys.pred, label: "PREDECESSORS", w: 150, cls: "mono" },
+        { key: "__actions", label: "ACTIONS", w: 140, cls: "mono" },
+      ];
+
+  // Compute sticky left offsets
+  let acc = 0;
+  for (const c of leftCols) {
+    c.left = acc;
+    acc += c.w;
+  }
+  const leftTotal = acc;
+
+  const headLeft = leftCols
+    .map(
+      (c) =>
+        `<div class="sch-h sch-sticky" style="width:${c.w}px; left:${c.left}px">${esc(
+          c.label,
+        )}</div>`,
+    )
+    .join("");
+
+  const headYears = yearSpans
+    .map((ys) => {
+      const w = (ys.to - ys.from) * cellW;
+      return `<div class="sch-year" style="width:${w}px">${ys.year}</div>`;
+    })
+    .join("");
+
+  const headWeeks = weekLabels
+    .map((lab) => `<div class="sch-week" style="width:${cellW}px">${lab}</div>`)
+    .join("");
+
+  const today = startOfWeekMonday(new Date());
+  const todayIdx = Math.max(
+    0,
+    Math.min(
+      weeks.length - 1,
+      Math.round(daysBetween(timelineStart, today) / 7),
+    ),
+  );
+
+  const bodyRows = rows
+    .map((r) => {
+      const idVal = safeIdFromRow(r);
+      const mode = String(r[keys.taskMode] ?? "").trim();
+      const isMilestone = /milestone/i.test(mode);
+      const isSummary =
+        /summary/i.test(mode) || /project\s*summary/i.test(mode);
+
+      const s = parseAnyDateSched(r[keys.start]);
+      const f = parseAnyDateSched(r[keys.finish]);
+
+      const startIdx = s
+        ? Math.round(daysBetween(timelineStart, startOfWeekMonday(s)) / 7)
+        : null;
+      const endIdx = f
+        ? Math.round(daysBetween(timelineStart, startOfWeekMonday(f)) / 7)
+        : startIdx;
+
+      const leftPx = startIdx == null ? 0 : startIdx * cellW;
+      const spanWeeks =
+        startIdx == null || endIdx == null
+          ? 0
+          : Math.max(1, endIdx - startIdx + 1);
+      const widthPx = spanWeeks * cellW;
+
+      const pct = Number(String(r[keys.pct] ?? "").replace(/[^\d.]/g, ""));
+      const pct01 = isNaN(pct) ? 0 : pct > 1 ? pct / 100 : pct;
+
+      const nameText = esc(String(r[keys.taskName] ?? "").trim());
+      const dateTag = s
+        ? `${String(String(r[keys.start] ?? "")).slice(0, 5)}`
+        : "";
+
+      const barHTML = isMilestone
+        ? `<div class="sch-item milestone" style="left:${leftPx}px">
+             <span class="sch-dia"></span>
+             <span class="sch-milabel">${nameText}</span>
+           </div>`
+        : `<div class="sch-item ${isSummary ? "summary" : "task"}" style="left:${leftPx}px; width:${widthPx}px">
+            <span class="sch-bar">
+              <span class="sch-progress" style="width:${Math.round(pct01 * 100)}%"></span>
+            </span>
+            <span class="sch-label">${nameText}</span>
+          </div>`;
+
+      const ganttCell = `
+        <div class="sch-gantt-cell" style="width:${ganttWidth}px">
+          <div class="sch-gantt-grid" style="--cw:${cellW}px">
+            <div class="sch-today" style="left:${todayIdx * cellW}px"></div>
+            ${barHTML}
+          </div>
+        </div>`;
+
+      const leftCells = leftCols
+        .map((c) => {
+          if (c.key === "__actions") {
+            return `<div class="sch-c sch-sticky" style="width:${c.w}px; left:${c.left}px">
+              <button class="btn ghost btn-xs" data-act="edit" data-id="${esc(idVal)}">Edit</button>
+              <button class="btn ghost btn-xs" data-act="del" data-id="${esc(idVal)}">Delete</button>
+            </div>`;
+          }
+
+          if (
+            String(c.key).toLowerCase() === String(keys.taskName).toLowerCase()
+          ) {
+            return `<div class="sch-c sch-sticky ${c.cls}" style="width:${c.w}px; left:${c.left}px">${scheduleNameCellHTML(
+              r,
+            )}</div>`;
+          }
+
+          if (
+            String(c.key).toLowerCase() === String(keys.start).toLowerCase()
+          ) {
+            return `<div class="sch-c sch-sticky ${c.cls}" style="width:${c.w}px; left:${c.left}px">${esc(
+              formatDatePDF(r[keys.start]),
+            )}</div>`;
+          }
+
+          if (
+            String(c.key).toLowerCase() === String(keys.finish).toLowerCase()
+          ) {
+            return `<div class="sch-c sch-sticky ${c.cls}" style="width:${c.w}px; left:${c.left}px">${esc(
+              formatDatePDF(r[keys.finish]),
+            )}</div>`;
+          }
+
+          if (
+            String(c.key).toLowerCase() === String(keys.duration).toLowerCase()
+          ) {
+            return `<div class="sch-c sch-sticky ${c.cls}" style="width:${c.w}px; left:${c.left}px">${esc(
+              formatScheduleDuration(
+                r[keys.duration],
+                r[keys.start],
+                r[keys.finish],
+              ),
+            )}</div>`;
+          }
+
+          if (String(c.key).toLowerCase() === String(keys.pct).toLowerCase()) {
+            return `<div class="sch-c sch-sticky ${c.cls}" style="width:${c.w}px; left:${c.left}px">${esc(
+              formatSchedulePercent(r[keys.pct]),
+            )}</div>`;
+          }
+
+          const raw = r[c.key] ?? "";
+          return `<div class="sch-c sch-sticky ${c.cls}" style="width:${c.w}px; left:${c.left}px">${esc(
+            raw,
+          )}</div>`;
+        })
+        .join("");
+
+      const rowType = isMilestone
+        ? "milestone"
+        : isSummary
+          ? "summary"
+          : "task";
+      return `<div class="sch-row sch-row--${rowType}" style="--leftw:${leftTotal}px">${leftCells}${ganttCell}</div>`;
+    })
+    .join("");
+
+  // Apply/remove gantt-fullscreen class on the schedule layout
+  const schLayout = el("scheduleLayout");
+  if (schLayout) {
+    if (isFullGantt) schLayout.classList.add("gantt-fullscreen");
+    else schLayout.classList.remove("gantt-fullscreen");
+  }
+
+  const ganttProTopbar = isFullGantt
+    ? `
+    <div class="gantt-pro-topbar">
+      <button class="gantt-pro-backbtn" id="ganttProBackBtn" type="button">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 1L3 7L9 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Back to Schedule
+      </button>
+      <div class="gantt-pro-info">
+        <div class="gantt-pro-title">Schedule Gantt</div>
+        <div class="gantt-pro-subtitle">Upper Myagdi-1 Hydro Power Project &middot; Troyer ITA &amp; Troyer Hydro</div>
+      </div>
+      <div class="gantt-pro-right">
+        <div class="gantt-pro-legend">
+          <span class="gpl-item"><span class="gpl-swatch task"></span>Task</span>
+          <span class="gpl-item"><span class="gpl-swatch summary"></span>Summary</span>
+          <span class="gpl-item"><span class="gpl-swatch milestone"></span>Milestone</span>
+          <span class="gpl-item"><span class="gpl-swatch today"></span>Today</span>
+        </div>
+        <div class="gantt-zoom-ctrl">
+          <label class="gantt-zoom-lbl" for="ganttProZoom">Zoom</label>
+          <select class="gantt-zoom-sel" id="ganttProZoom">
+            <option value="14">Compact</option>
+            <option value="18">Normal</option>
+            <option value="24">Wide</option>
+            <option value="32">Extra Wide</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  `
+    : "";
+
+  mount.innerHTML =
+    ganttProTopbar +
+    `
+    <div class="sch-sheet ${isFullGantt ? "sch-sheet--gantt" : ""}" style="--cw:${cellW}px">
+      <div class="sch-head">
+        <div class="sch-head-left" style="width:${leftTotal}px">${headLeft}</div>
+        <div class="sch-head-right" style="width:${ganttWidth}px">
+          <div class="sch-year-row">${headYears}</div>
+          <div class="sch-week-row">${headWeeks}</div>
+        </div>
+      </div>
+      <div class="sch-body">${bodyRows}</div>
+    </div>`;
+
+  // Wire up the inline gantt controls
+  if (isFullGantt) {
+    const backBtn = el("ganttProBackBtn");
+    if (backBtn)
+      backBtn.onclick = () => navigate("schedule", { pushHash: true });
+    const zoomSel = el("ganttProZoom");
+    if (zoomSel) {
+      zoomSel.value = String(cellW);
+      zoomSel.onchange = () => {
+        store.ganttCellW = Number(zoomSel.value) || 18;
+        renderScheduleSheet();
+      };
+    }
+  }
+}
 
 function render() {
   if (store.view === "overview") {
     renderOverviewDashboard();
-  } else {
-    renderTableView();
+    return;
   }
+
+  if (store.view === "gantt") {
+    renderGanttPage();
+    return;
+  }
+
+  renderTableView();
 }
 
 // ================================================================
@@ -898,6 +1945,11 @@ function renderOverviewDashboard() {
   if (chartInstances.status) {
     chartInstances.status.destroy();
     chartInstances.status = null;
+  }
+  if (store.view === "schedule" && /^task\s*mode$/i.test(key)) {
+    const v = String(row[key] ?? "").trim() || "Task";
+    td.innerHTML = `<span class="pill">${v}</span>`;
+    return;
   }
 
   renderOverviewStats();
@@ -1440,14 +2492,11 @@ function activityTimeValue(row) {
     const t = Date.parse(String(row[dateKey]).slice(0, 10));
     if (!Number.isNaN(t)) return t;
   }
-
-  // Final fallback: use ID sequence (EMP-00012, ENG-00007, SETI-00003)
   return idSeq(row.id);
 }
 
 function formatActivityTime(row) {
   const t = activityTimeValue(row);
-  // if it's an epoch (ms), show date; if it's just a small id seq, show "Recently"
   if (t > 1000000000) return new Date(t).toLocaleDateString();
   return "Recently";
 }
@@ -1460,9 +2509,36 @@ function renderTableView() {
   el("overviewView").style.display = "none";
   el("tableView").style.display = "";
 
+  const isSchedule = store.view === "schedule";
+  const isGantt = store.view === "gantt";
+
   renderStats();
   renderFilterChips();
   renderAdvancedFilterPanel();
+  mountToolbarButtons();
+
+  // toolbar toggles
+  const btnGantt = document.getElementById("btnGantt");
+  const btnBack = document.getElementById("btnBackFromGantt");
+  const zoomWrap = document.getElementById("ganttZoomWrap");
+  const btnAdd = document.getElementById("btnAddRow");
+  const btnDl = document.getElementById("btnDownloadExcel");
+
+  if (btnGantt) btnGantt.style.display = isSchedule ? "" : "none";
+  if (btnBack) btnBack.style.display = isGantt ? "" : "none";
+  if (zoomWrap) zoomWrap.style.display = isGantt ? "flex" : "none";
+  if (btnAdd) btnAdd.style.display = isSchedule || isGantt ? "" : "";
+  if (btnDl) btnDl.style.display = isGantt ? "none" : "";
+
+  applyViewLayout();
+
+  // Schedule + Gantt both render the schedule sheet
+  if (isSchedule || isGantt) {
+    renderScheduleSheet();
+    return;
+  }
+
+  // other views use normal table
   renderTable();
   renderPagination();
 }
@@ -1477,20 +2553,74 @@ function mountToolbarButtons() {
   wrap.style.gap = "8px";
   wrap.style.alignItems = "center";
 
-  const downloadBtn = document.createElement("button");
-  downloadBtn.className = "btn ghost btn-sm";
-  downloadBtn.textContent = "Download Excel";
-  downloadBtn.onclick = () => {
-    window.location.href = `${API}/excel/download`;
+  const backBtn = document.createElement("button");
+  backBtn.id = "btnBackFromGantt";
+  backBtn.className = "btn ghost btn-sm";
+  backBtn.textContent = "Back to Schedule";
+  backBtn.style.display = "none";
+  backBtn.onclick = async () => {
+    await navigate("schedule", { pushHash: true });
   };
 
+  const ganttBtn = document.createElement("button");
+  ganttBtn.id = "btnGantt";
+  ganttBtn.className = "btn ghost btn-sm";
+  ganttBtn.textContent = "Gantt";
+  ganttBtn.style.display = "none";
+  ganttBtn.onclick = async () => {
+    // Ensure schedule data exists
+    if (!store.allSchedule?.length) await loadAllData();
+    await navigate("gantt", { pushHash: true });
+  };
+
+  const zoomWrap = document.createElement("div");
+  zoomWrap.id = "ganttZoomWrap";
+  zoomWrap.style.display = "none";
+  zoomWrap.style.alignItems = "center";
+  zoomWrap.style.gap = "8px";
+  zoomWrap.style.marginLeft = "6px";
+
+  const zoomLabel = document.createElement("span");
+  zoomLabel.textContent = "Zoom";
+  zoomLabel.style.fontWeight = "800";
+  zoomLabel.style.fontSize = "12px";
+  zoomLabel.style.color = "var(--text-2)";
+
+  const zoomSel = document.createElement("select");
+  zoomSel.id = "ganttZoom";
+  zoomSel.className = "page-size-select";
+  zoomSel.innerHTML = `
+    <option value="18">Dense</option>
+    <option value="22" selected>Normal</option>
+    <option value="28">Large</option>
+    <option value="36">Extra</option>
+  `;
+  zoomSel.onchange = () => {
+    store.ganttCellW = Number(zoomSel.value) || 22;
+    if (store.view === "gantt") renderScheduleSheet();
+  };
+
+  zoomWrap.appendChild(zoomLabel);
+  zoomWrap.appendChild(zoomSel);
+
+  const downloadBtn = document.createElement("button");
+  downloadBtn.id = "btnDownloadExcel";
+  downloadBtn.className = "btn ghost btn-sm";
+  downloadBtn.textContent = "Download Excel";
+  downloadBtn.onclick = () => (window.location.href = `${API}/excel/download`);
+
   const addBtn = document.createElement("button");
+  addBtn.id = "btnAddRow";
   addBtn.className = "btn primary btn-sm";
   addBtn.textContent = "Add Row";
   addBtn.onclick = () => openFormModal("add", null);
 
+  wrap.appendChild(backBtn);
+  wrap.appendChild(ganttBtn);
+  wrap.appendChild(zoomWrap);
   wrap.appendChild(downloadBtn);
   wrap.appendChild(addBtn);
+
   right.prepend(wrap);
 }
 
@@ -1662,15 +2792,33 @@ function renderAdvancedFilterPanel() {
 
 function renderTable() {
   const cfg = views[store.view];
-  const cols = cfg.columns;
+  const cols = cfg.columns || [];
   const term = store.globalSearch.trim().toLowerCase();
   const sheet = SHEET_MAP[store.view];
   const showActions = store.view !== "overview" && !!sheet;
 
+  const isSchedule = store.view === "schedule";
+  const thead =
+    document.getElementById("theadSchedule") ||
+    document.getElementById("theadDefault");
+
+  const tbody =
+    document.getElementById("tbodySchedule") ||
+    document.getElementById("tbodyDefault");
+
+  if (!thead || !tbody) {
+    toast(
+      "error",
+      "Failed to load current view",
+      "Table mount missing (thead/tbody)",
+    );
+    return;
+  }
+
   if (!cols.length) {
-    el("thead").innerHTML = "";
+    thead.innerHTML = "";
   } else {
-    el("thead").innerHTML = `<tr>${cols
+    thead.innerHTML = `<tr>${cols
       .map((col) => {
         const sortable = col.sortable !== false;
         const isSorted = store.sortCol === col.key;
@@ -1692,8 +2840,8 @@ function renderTable() {
   el("rowCount").textContent = filtered.length.toLocaleString();
 
   if (!paged.length) {
-    const hasData = store.data.length > 0;
-    el("tbody").innerHTML = `
+    const hasData = (store.data || []).length > 0;
+    tbody.innerHTML = `
       <tr class="empty-row">
         <td colspan="${(cols.length || 1) + (showActions ? 1 : 0)}">
           <span class="empty-row-label">
@@ -1704,38 +2852,70 @@ function renderTable() {
     return;
   }
 
-  el("tbody").innerHTML = paged
+  tbody.innerHTML = paged
     .map((row) => {
       const tds = cols
         .map((col) => {
           const raw = row[col.key] ?? "";
+          const kLower = String(col.key).trim().toLowerCase();
 
-          if (isStatusKey(col.key)) {
+          if (isStatusKey(col.key) && store.view !== "schedule") {
             return `<td>${statusBadgeHTML(raw)}</td>`;
+          }
+
+          if (
+            store.view === "schedule" &&
+            (kLower === "start" || kLower === "finish")
+          ) {
+            return `<td class="mono">${esc(formatDatePDF(raw))}</td>`;
+          }
+
+          if (
+            store.view === "schedule" &&
+            (kLower === "% complete" ||
+              kLower === "percent complete" ||
+              kLower === "progress")
+          ) {
+            return `<td class="mono sch-pct">${esc(formatSchedulePercent(raw))}</td>`;
+          }
+
+          if (store.view === "schedule" && kLower === "duration") {
+            const startV = row[findKey(row, /^start$/i) || "Start"];
+            const finV = row[findKey(row, /^finish$/i) || "Finish"];
+            return `<td class="mono">${esc(formatScheduleDuration(raw, startV, finV))}</td>`;
+          }
+
+          if (store.view === "schedule" && kLower === "task name") {
+            return `<td class="sch-task">${scheduleNameCellHTML(row)}</td>`;
+          }
+
+          if (col.type === "date") {
+            return `<td class="mono">${esc(formatDateShort(raw))}</td>`;
           }
 
           return col.type === "number"
             ? `<td class="mono">${esc(raw)}</td>`
-            : col.type === "date"
-              ? `<td class="mono">${esc(formatDateShort(raw))}</td>`
-              : `<td>${highlight(raw, term)}</td>`;
+            : `<td>${highlight(raw, term)}</td>`;
         })
         .join("");
 
-      const rowId = store.view === "sites"
-       ? row.Location || row.location || ""
-       : row.id || "";
+      const rowId =
+        store.view === "sites"
+          ? row.Location || row.location || ""
+          : store.view === "schedule"
+            ? (row.ID ?? row.Id ?? row.id ?? "")
+            : row.id || "";
+
       const actions = showActions
-        ? `
-<td class="mono">
-  <button class="btn ghost btn-sm" data-act="edit" data-id="${esc(rowId)}">Edit</button>
-  <button class="btn ghost btn-sm" data-act="del" data-id="${esc(rowId)}">Delete</button>
-  ${
-    store.view === "employees"
-      ? `<button class="btn ghost btn-sm" data-act="export" data-id="${esc(rowId)}">Export</button>`
-      : ""
-  }
-</td>`
+        ? `<td class="mono">
+            <button class="btn ghost btn-sm" data-act="edit" data-id="${esc(rowId)}">Edit</button>
+            <button class="btn ghost btn-sm" data-act="del" data-id="${esc(rowId)}">Delete</button>
+            ${
+              store.view === "employees"
+                ? `<button class="btn ghost btn-sm" data-act="export" data-id="${esc(rowId)}">Export</button>`
+                : ""
+            }
+          </td>`
         : "";
 
       return `<tr>${tds}${actions}</tr>`;
@@ -1761,26 +2941,27 @@ function renderPagination() {
 async function setView(view) {
   if (!view) view = "overview";
 
-  // Update store
   store.view = view;
+  applyViewLayout();
+  mountScheduleGanttButton();
+  const isGantt = store.view === "gantt";
+  const scheduleHeader = document.getElementById("scheduleHeader");
+  if (scheduleHeader) scheduleHeader.style.display = "none"; // topbar shows project info in gantt
 
-  // Remove active class from all nav links
   document.querySelectorAll(".nav-link").forEach((link) => {
     link.classList.remove("active");
   });
 
-  // Add active class to selected
   const activeNav = document.querySelector(`.nav-link[data-view="${view}"]`);
   if (activeNav) activeNav.classList.add("active");
 
-  // Hide all view sections
-  document.querySelectorAll(".view-section").forEach((section) => {
-    section.style.display = "none";
-  });
+  const overviewView = document.getElementById("overviewView");
+  const tableView = document.getElementById("tableView");
 
-  // Show current view section
-  const activeSection = document.getElementById(view);
-  if (activeSection) activeSection.style.display = "block";
+  if (overviewView)
+    overviewView.style.display = view === "overview" ? "" : "none";
+  if (tableView) tableView.style.display = view === "overview" ? "none" : "";
+
   localStorage.setItem("activeView", view);
 
   history.replaceState(
@@ -1789,8 +2970,8 @@ async function setView(view) {
     `${location.pathname}${location.search}#${view}`,
   );
 
-  // Load data for that page if needed
   await loadCurrentViewData();
+  render();
 }
 
 function applyFiltersFromPanel() {
@@ -1821,9 +3002,14 @@ function openFormModal(mode, rowId = null) {
   const sheet = SHEET_MAP[store.view];
   if (!sheet) return;
 
-  const cols = views[store.view].columns.filter(
-    (c) => c.key !== "id" && c.key !== "createdAt" && c.key !== "updatedAt",
-  );
+  const cols = views[store.view].columns.filter((c) => {
+  if (c.key === "createdAt" || c.key === "updatedAt") return false;
+
+  if (store.view === "schedule" && /^id$/i.test(String(c.key))) return false;
+  if (c.key === "id") return false;
+
+  return true;
+});
 
   if (!cols.length) {
     toast("error", "No columns found", "Check your data structure");
@@ -1857,10 +3043,17 @@ function openFormModal(mode, rowId = null) {
           ? store.data.find(
               (r) =>
                 String(r.id || "").trim() === String(rowId).trim() ||
-                String(r.Location || r.location || "").trim().toLowerCase() ===
-                String(rowId).trim().toLowerCase()
+                String(r.Location || r.location || "")
+                  .trim()
+                  .toLowerCase() === String(rowId).trim().toLowerCase(),
             )
-          : store.data.find((r) => String(r.id) === String(rowId))) || {}
+          : store.view === "schedule"
+            ? store.data.find((r) => {
+                const rid = String(rowId).trim();
+                const a = r.id ?? r.ID ?? r.Id ?? "";
+                return String(a).trim() === rid;
+              })
+            : store.data.find((r) => String(r.id) === String(rowId))) || {}
       : {};
 
   formFields.className =
@@ -2444,17 +3637,26 @@ async function handleFormSubmit(e) {
     }
 
     if (currentFormMode === "add") {
-      await apiCreateRow(sheet, store.view, data);
-      toast("success", "Record created successfully");
-    } else {
-      const updateId =
-      store.view === "sites"
-    ? (data.Location || data.location || currentFormId)
-    : currentFormId;
 
-    await apiUpdateRow(sheet, updateId, data);
-      toast("success", "Record updated successfully");
-    }
+  // ✅ schedule ONLY: never send any ID to backend
+  if (store.view === "schedule") {
+    delete data.ID;
+    delete data.Id;
+    delete data.id;
+  }
+
+  await apiCreateRow(sheet, store.view, data);
+  toast("success", "Record created successfully");
+
+} else {
+  const updateId =
+    store.view === "sites"
+      ? data.Location || data.location || currentFormId
+      : currentFormId;
+
+  await apiUpdateRow(sheet, updateId, data);
+  toast("success", "Record updated successfully");
+}
 
     closeFormModal();
     await loadCurrentViewData();
@@ -2606,42 +3808,34 @@ async function init() {
   mountToaster();
   await loadAllData();
   mountToolbarButtons();
+  wireGanttControls();
+
   const initialView =
     getViewFromHash() || localStorage.getItem("activeView") || DEFAULT_VIEW;
+
   await setView(initialView);
-}
 
-// Run once when DOM is ready
-document.addEventListener("DOMContentLoaded", () => {
-  init().catch((err) => console.error("init failed:", err));
-});
-
-init();
-
-document.addEventListener("DOMContentLoaded", () => {
-
+  // profile menu wiring (after DOM is ready)
   const btn = document.getElementById("profileBtn");
   const menu = document.getElementById("profileMenu");
   const logoutBtn = document.getElementById("logoutBtn");
 
-  if (!btn || !menu) return;
+  if (btn && menu) {
+    btn.addEventListener("click", () => menu.classList.toggle("show"));
 
-  btn.addEventListener("click", () => {
-    menu.classList.toggle("show");
-  });
-
-  document.addEventListener("click", (e) => {
-    if (!btn.contains(e.target) && !menu.contains(e.target)) {
-      menu.classList.remove("show");
-    }
-  });
+    document.addEventListener("click", (e) => {
+      if (!btn.contains(e.target) && !menu.contains(e.target)) {
+        menu.classList.remove("show");
+      }
+    });
+  }
 
   logoutBtn?.addEventListener("click", async () => {
-    await fetch("/api/auth/logout", {
-      method: "POST",
-      credentials: "include"
-    });
+    await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     window.location.href = "/login";
   });
+}
 
+document.addEventListener("DOMContentLoaded", () => {
+  init().catch((err) => console.error("init failed:", err));
 });

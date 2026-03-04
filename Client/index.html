@@ -21,9 +21,10 @@
     <div class="app">
       <header class="navbar">
         <div class="nav-brand">
-          <img src="troyer-logo.svg" class="nav-logo" />
+          <img src="troyer-logo.svg" class="nav-logo" alt="Troyer" />
         </div>
       </header>
+
       <div class="nav-tabs-wrap">
         <nav class="nav-tabs">
           <button class="nav-link" data-view="overview">Overview</button>
@@ -33,12 +34,17 @@
           <button class="nav-link" data-view="schedule">Schedule</button>
 
           <div class="nav-profile">
-            <button id="profileBtn" class="profile-btn">
+            <button
+              id="profileBtn"
+              class="profile-btn"
+              type="button"
+              aria-label="Profile menu"
+            >
               <span class="profile-arrow">▾</span>
             </button>
 
             <div id="profileMenu" class="profile-menu">
-              <button class="profile-item">Settings</button>
+              <button class="profile-item" type="button">Settings</button>
               <button id="logoutBtn" class="profile-item logout" type="button">
                 Logout
               </button>
@@ -46,9 +52,10 @@
           </div>
         </nav>
       </div>
+
       <main class="main">
         <section class="content">
-          <div id="overviewView" style="display: none">
+          <div id="overviewView" style="display:none">
             <div class="overview-hero">
               <img
                 src="werk_wiesen_08-1-e1635341273542.jpg.jpeg"
@@ -63,9 +70,7 @@
               <div class="chart-card">
                 <div class="chart-header">
                   <h3 class="chart-title">Workforce by Site</h3>
-                  <span class="chart-subtitle"
-                    >Employees currently engaged</span
-                  >
+                  <span class="chart-subtitle">Employees currently engaged</span>
                 </div>
                 <div class="chart-container">
                   <canvas id="sitesChart"></canvas>
@@ -84,10 +89,7 @@
             </div>
           </div>
 
-          <!-- ===========================
-               TABLE VIEW
-          ============================ -->
-          <div id="tableView" style="display: none">
+          <div id="tableView" style="display:none">
             <div id="stats" class="stats-row"></div>
 
             <div class="filter-bar" id="filterBar">
@@ -126,7 +128,9 @@
                 <button
                   class="filter-clear-btn"
                   id="clearSearch"
-                  style="display: none"
+                  style="display:none"
+                  type="button"
+                  aria-label="Clear search"
                 >
                   <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                     <path
@@ -145,17 +149,18 @@
                 <button
                   class="btn ghost btn-sm"
                   id="btnClearAll"
-                  style="display: none"
+                  style="display:none"
+                  type="button"
                 >
                   Clear all filters
                 </button>
 
-                <button class="btn ghost btn-sm" id="btnToggleFilters">
+                <button class="btn ghost btn-sm" id="btnToggleFilters" type="button">
                   Filters
                   <span
                     class="filter-count-badge"
                     id="filterCountBadge"
-                    style="display: none"
+                    style="display:none"
                   ></span>
                 </button>
               </div>
@@ -164,25 +169,49 @@
             <div
               class="advanced-filters-panel"
               id="advancedFilters"
-              style="display: none"
+              style="display:none"
             >
-              <div
-                id="advancedFiltersInner"
-                class="advanced-filters-grid"
-              ></div>
+              <div id="advancedFiltersInner" class="advanced-filters-grid"></div>
               <div class="advanced-filters-footer">
                 <span class="advanced-filters-note">
                   Filters apply across all visible columns
                 </span>
-                <button class="btn ghost btn-sm" id="btnResetFilters">
+                <button class="btn ghost btn-sm" id="btnResetFilters" type="button">
                   Reset
                 </button>
-                <button class="btn primary btn-sm" id="btnApplyFilters">
+                <button class="btn primary btn-sm" id="btnApplyFilters" type="button">
                   Apply
                 </button>
               </div>
             </div>
 
+            <!-- ✅ FULL PAGE GANTT VIEW (ONLY GANTT HERE) -->
+            <div id="ganttOnlyView" class="gantt-only-view" style="display:none">
+              <div class="gantt-only-topbar">
+                <button id="btnBackToSchedule" class="btn ghost btn-sm" type="button">
+                  ← Back to Schedule
+                </button>
+
+                <div class="gantt-only-title">
+                  <div class="gantt-only-h1">Schedule Gantt</div>
+                  <div class="gantt-only-sub">Upper Myagdi-1 Hydro Power Project</div>
+                </div>
+
+                <div class="gantt-only-controls">
+                  <label class="gantt-zoom-label" for="ganttZoomSelect">Zoom</label>
+                  <select id="ganttZoomSelect" class="gantt-zoom-select">
+                    <option value="14">Very Dense</option>
+                    <option value="18" selected>Dense</option>
+                    <option value="24">Normal</option>
+                    <option value="32">Wide</option>
+                  </select>
+                </div>
+              </div>
+
+              <div id="ganttOnlyScroller" class="gantt-only-scroller">
+                <div id="ganttOnlyCanvas" class="gantt-only-canvas"></div>
+              </div>
+            </div>
             <div class="table-card">
               <div class="table-toolbar">
                 <div class="table-meta" id="rowsInfo">
@@ -191,9 +220,7 @@
 
                 <div class="table-toolbar-right">
                   <div class="page-size-wrap">
-                    <label class="page-size-label" for="pageSizeSelect"
-                      >Rows</label
-                    >
+                    <label class="page-size-label" for="pageSizeSelect">Rows</label>
                     <select class="page-size-select" id="pageSizeSelect">
                       <option value="10">10</option>
                       <option value="25">25</option>
@@ -204,22 +231,32 @@
                 </div>
               </div>
 
-              <div class="table-scroll-wrap">
+              <div id="scheduleHeader" class="schedule-header" style="display:none">
+                <div><strong>Name of Project:</strong> Upper Myagdi-1 Hydro Power Project</div>
+                <div><strong>Name of Client:</strong> Urja Developers, Nepal</div>
+                <div><strong>Name of E&amp;M Contractor:</strong> Troyer ITA &amp; Troyer Hydro</div>
+              </div>
+
+              <div id="scheduleLayout" class="schedule-layout" style="display:none">
+                <div id="scheduleScroller" class="schedule-scroller">
+                  <div id="scheduleSheet" class="schedule-sheet"></div>
+                </div>
+              </div>
+
+              <div id="defaultTableWrap" class="table-scroll-wrap">
                 <table class="table">
-                  <thead id="thead"></thead>
-                  <tbody id="tbody"></tbody>
+                  <thead id="theadDefault"></thead>
+                  <tbody id="tbodyDefault"></tbody>
                 </table>
               </div>
 
               <div class="table-pagination" id="paginationBar">
-                <button class="pag-btn" id="btnPrevPage" disabled>‹</button>
-
+                <button class="pag-btn" id="btnPrevPage" disabled type="button">‹</button>
                 <span class="pag-info">
                   Page <span id="pageNo">1</span> of
                   <span id="pageTotal">1</span>
                 </span>
-
-                <button class="pag-btn" id="btnNextPage" disabled>›</button>
+                <button class="pag-btn" id="btnNextPage" disabled type="button">›</button>
               </div>
             </div>
           </div>
@@ -227,23 +264,25 @@
       </main>
     </div>
 
-    <!-- ===========================
-         MODAL
-    ============================ -->
-    <div class="modal-overlay" id="modalOverlay" style="display: none">
+    <div class="modal-overlay" id="modalOverlay" style="display:none">
       <div class="modal-container">
         <div class="modal-header">
           <h2 class="modal-title" id="modalTitle">Add Record</h2>
-          <button class="modal-close" id="modalClose">×</button>
+          <button
+            class="modal-close"
+            id="modalClose"
+            type="button"
+            aria-label="Close"
+          >
+            ×
+          </button>
         </div>
 
         <div class="modal-body">
           <form id="modalForm" class="modal-form">
             <div id="formFields" class="form-fields"></div>
             <div class="form-actions">
-              <button type="button" class="btn ghost" id="btnCancelForm">
-                Cancel
-              </button>
+              <button type="button" class="btn ghost" id="btnCancelForm">Cancel</button>
               <button type="submit" class="btn primary" id="btnSubmitForm">
                 <span id="submitBtnText">Save</span>
               </button>
