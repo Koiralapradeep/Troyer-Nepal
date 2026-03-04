@@ -85,7 +85,14 @@ router.post("/login", async (req, res) => {
 });
 
 router.post("/logout", (req, res) => {
-  res.clearCookie(COOKIE_NAME, { path: "/" });
+  res.cookie(COOKIE_NAME, "", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    expires: new Date(0),
+  });
+
   return res.json({ ok: true });
 });
 

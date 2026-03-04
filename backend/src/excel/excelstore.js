@@ -14,15 +14,20 @@ const text = (v) => String(v ?? "").trim();
 
 function findHeaderKey(sample, patterns) {
   const keys = Object.keys(sample || {});
-  return (
-    keys.find((k) => patterns.some((re) => re.test(String(k)))) || null
-  );
+  return keys.find((k) => patterns.some((re) => re.test(String(k)))) || null;
 }
 
 function getAllObjects(ws) {
+  const headerRowIndex = findHeaderRowIndex(ws);
   const last = ws.actualRowCount || ws.rowCount || 1;
   const items = [];
-  for (let r = 2; r <= last; r++) items.push(rowToObject(ws, r));
+
+  for (let r = headerRowIndex + 1; r <= last; r++) {
+    const obj = rowToObject(ws, r, headerRowIndex);
+    const hasAny = Object.values(obj).some((v) => String(v ?? "").trim() !== "");
+    if (!hasAny) continue;
+    items.push(obj);
+  }
   return items;
 }
 
@@ -46,6 +51,20 @@ function todayStamp() {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function toDateOnly(v) {
+  if (!v) return null;
+  const d = v instanceof Date ? v : new Date(v);
+  if (isNaN(d.getTime())) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function diffDays(start, finish) {
+  const s = toDateOnly(start);
+  const f = toDateOnly(finish);
+  if (!s || !f) return "";
+  return Math.max(0, Math.round((f - s) / 86400000));
 }
 
 function newestUploadPath() {
@@ -97,7 +116,6 @@ function toISODate(d) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-
 function parseAnyDate(v) {
   if (!v) return null;
 
@@ -108,7 +126,6 @@ function parseAnyDate(v) {
   const s = String(v).trim();
   if (!s) return null;
 
-  // Detect Excel serial number FIRST
   const num = Number(s);
   if (!isNaN(num) && num > 20000 && num < 60000) {
     const base = new Date(Date.UTC(1899, 11, 30));
@@ -116,7 +133,6 @@ function parseAnyDate(v) {
     return startOfDay(dt);
   }
 
-  // ISO format
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) {
     const d = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
@@ -136,24 +152,21 @@ function computeEngagementFields(obj) {
   const status = end ? "Completed" : start ? "Active" : "";
 
   const today = startOfDay(new Date());
-  const duration =
-    start ? (end ? daysInclusive(start, end) : daysInclusive(start, today)) : "";
+  const duration = start ? (end ? daysInclusive(start, end) : daysInclusive(start, today)) : "";
 
   return {
     ...obj,
     "Starting Date": start
       ? toISODate(start)
       : obj["Starting Date"]
-      ? String(obj["Starting Date"]).slice(0, 10)
-      : "",
+        ? String(obj["Starting Date"]).slice(0, 10)
+        : "",
     "End Date": end ? toISODate(end) : "",
     "Duration (Days)": duration === "" ? "" : String(duration),
     status,
   };
 }
-// ===============================
-//  Employee bundle workbook
-// ===============================
+
 export async function exportEmployeeWorkbookBuffer(employeeId) {
   return withWriteLock(async () => {
     const wb = await loadWorkbook();
@@ -163,20 +176,24 @@ export async function exportEmployeeWorkbookBuffer(employeeId) {
     const wsSites = getSheetOrThrow(wb, "Sites_List");
     const wsSeti = wb.getWorksheet("Seti_Updated");
 
-    // Ensure columns are correct
     prepareSheet(wsProfiles, "profiles");
     prepareSheet(wsEng, "Engagements");
     prepareSheet(wsSites, "Sites_List");
     if (wsSeti) prepareSheet(wsSeti, "Seti_Updated");
 
-    // ---- Find employee in profiles by id
     const pLast = wsProfiles.actualRowCount || wsProfiles.rowCount || 1;
     let employeeRow = null;
 
     for (let r = 2; r <= pLast; r++) {
       const obj = rowToObject(wsProfiles, r);
-      if (String(obj.id || "").trim().toLowerCase() === String(employeeId).trim().toLowerCase()) {
+      if (
+        String(obj.id || "").trim().toLowerCase() ===
+        String(employeeId).trim().toLowerCase()
+      ) {
         employeeRow = obj;
+        if (String(obj["Duration (days)"] ?? "").trim() === "") {
+          obj["Duration (days)"] = diffDays(obj["Start"], obj["Finish"]);
+        }
         break;
       }
     }
@@ -185,7 +202,6 @@ export async function exportEmployeeWorkbookBuffer(employeeId) {
 
     const employeeName = String(employeeRow["Employee Name"] || "").trim().toLowerCase();
 
-    // ---- Filter engagements by Employee ID
     const eLast = wsEng.actualRowCount || wsEng.rowCount || 1;
     const myEngagements = [];
 
@@ -197,14 +213,12 @@ export async function exportEmployeeWorkbookBuffer(employeeId) {
       }
     }
 
-    // ---- Collect sites from engagements (Site Engaged)
     const siteSet = new Set(
       myEngagements
         .map((e) => String(e["Site Engaged"] || "").trim().toLowerCase())
         .filter(Boolean),
     );
 
-    // ---- Filter Sites_List by Location
     const sLast = wsSites.actualRowCount || wsSites.rowCount || 1;
     const mySites = [];
     for (let r = 2; r <= sLast; r++) {
@@ -213,11 +227,9 @@ export async function exportEmployeeWorkbookBuffer(employeeId) {
       if (loc && siteSet.has(loc)) mySites.push(obj);
     }
 
-    // ---- Filter schedule rows (Seti_Updated) by Responsibility/Owner/Assigned (best-effort)
     const mySchedule = [];
     if (wsSeti) {
       const last = wsSeti.actualRowCount || wsSeti.rowCount || 1;
-      const header = rowToObject(wsSeti, 1); 
       const headerRow = wsSeti.getRow(1);
       const maxCol = wsSeti.columnCount || headerRow.cellCount || 0;
       let respColName = null;
@@ -235,7 +247,6 @@ export async function exportEmployeeWorkbookBuffer(employeeId) {
           const obj = rowToObject(wsSeti, r);
           const v = String(obj[respColName] || "").trim().toLowerCase();
           const idLower = String(employeeId).trim().toLowerCase();
-
           if (v === idLower || (employeeName && v.includes(employeeName))) {
             mySchedule.push(obj);
           }
@@ -433,7 +444,7 @@ function createDefaultWorkbook() {
   sites.addRow(["Location"]);
 
   const seti = wb.addWorksheet("Seti_Updated");
-  seti.addRow(["id"]); 
+  seti.addRow(["id"]);
 
   return wb;
 }
@@ -456,7 +467,8 @@ function prepareSheet(ws, sheet) {
     changed = ensureColumnAppend(ws, "Site Engaged", ["Site", "SiteEngaged", "Location"]) || changed;
     changed = ensureColumnAppend(ws, "Starting Date", ["Start Date", "StartDate"]) || changed;
     changed = ensureColumnAppend(ws, "End Date", ["Ending Date", "EndDate"]) || changed;
-    changed = ensureColumnAppend(ws, "Duration (Days)", ["Duration", "Days", "Duration Days"]) || changed;
+    changed =
+      ensureColumnAppend(ws, "Duration (Days)", ["Duration", "Days", "Duration Days"]) || changed;
     changed = ensureColumnAppend(ws, "status", ["Status", "Phase"]) || changed;
     changed = ensureColumnAppend(ws, "id", ["ID"]) || changed;
     changed = ensureColumnAppend(ws, "Employee ID", ["Emp ID", "EmployeeID"]) || changed;
@@ -469,7 +481,7 @@ function prepareSheet(ws, sheet) {
   }
 
   if (sheet === "Seti_Updated") {
-    changed = ensureColumnAppend(ws, "id", ["ID", "Id"]) || changed;
+    changed = ensureColumnCanonical(ws, "id", 1, ["ID", "Id"]) || changed;
     return changed;
   }
 
@@ -566,24 +578,48 @@ function findRowByLocation(ws, location) {
   return -1;
 }
 
-function rowToObject(ws, rowNumber) {
-  const headerRow = ws.getRow(1);
+function rowToObject(ws, rowNumber, headerRowIndex = 1) {
+  const headerRow = ws.getRow(headerRowIndex);
   const row = ws.getRow(rowNumber);
-  const obj = {};
 
+  const obj = {};
   const maxCol = ws.columnCount || headerRow.cellCount || 0;
 
   for (let col = 1; col <= maxCol; col++) {
-    const key = text(cellToPlain(headerRow.getCell(col)));
+    const keyRaw = headerRow.getCell(col).value;
+    const key = String(keyRaw ?? "").trim();
     if (!key) continue;
 
-    const value = text(cellToPlain(row.getCell(col)));
+    const cell = row.getCell(col);
+    let v = cell.value;
 
-    if (obj[key] && text(obj[key]) && !text(value)) continue;
-    if (!obj[key] || !text(obj[key])) obj[key] = value;
+    if (v == null) v = "";
+    if (typeof v === "string") v = v.trim();
+
+    obj[key] = v;
   }
 
   return obj;
+}
+
+function findHeaderRowIndex(ws) {
+  const want = ["ID", "Task Name", "Start", "Finish"];
+  const maxScan = Math.min(25, ws.rowCount || 25);
+
+  for (let r = 1; r <= maxScan; r++) {
+    const row = ws.getRow(r);
+    const values = [];
+    for (let c = 1; c <= Math.min(30, ws.columnCount || 30); c++) {
+      const v = row.getCell(c).value;
+      if (v == null) continue;
+      values.push(String(v).trim());
+    }
+
+    const hit = want.every((k) => values.some((x) => x.toLowerCase() === k.toLowerCase()));
+    if (hit) return r;
+  }
+
+  return 1;
 }
 
 function setRowFromObject(ws, rowNumber, patch) {
@@ -611,7 +647,7 @@ function mapDataToHeaderRow(ws, dataObj) {
   const vals = [];
   for (let col = 1; col <= maxCol; col++) {
     const k = normKey(cellToPlain(header.getCell(col)));
-    vals.push(incoming.has(k) ? incoming.get(k) ?? "" : "");
+    vals.push(incoming.has(k) ? (incoming.get(k) ?? "") : "");
   }
   return vals;
 }
@@ -626,7 +662,34 @@ async function listRows({ sheet = "profiles", page = 1, pageSize = 50 } = {}) {
 
     if (sheet === "profiles") changed = backfillIds(ws, "EMP") || changed;
     if (sheet === "Engagements") changed = backfillIds(ws, "ENG") || changed;
-    if (sheet === "Seti_Updated") changed = backfillIds(ws, "SETI") || changed;
+
+    if (sheet === "Seti_Updated") {
+      const idx = headerIndexMapNormalized(ws);
+      const idCol = idx.get("id");
+      if (idCol) {
+        const last = ws.actualRowCount || ws.rowCount || 1;
+        let max = 0;
+
+        for (let r = 2; r <= last; r++) {
+          const raw = text(cellToPlain(ws.getRow(r).getCell(idCol)));
+          const n = parseInt(String(raw).replace(/[^\d]/g, ""), 10);
+          if (!isNaN(n)) max = Math.max(max, n);
+        }
+
+        let changedLocal = false;
+        for (let r = 2; r <= last; r++) {
+          const row = ws.getRow(r);
+          const raw = text(cellToPlain(row.getCell(idCol)));
+          if (raw) continue;
+          max += 1;
+          row.getCell(idCol).value = String(max);
+          row.commit?.();
+          changedLocal = true;
+        }
+
+        changed = changedLocal || changed;
+      }
+    }
 
     if (sheet === "Engagements") {
       const wsProfiles = wb.getWorksheet("profiles");
@@ -676,24 +739,43 @@ export async function createRow({ sheet = "profiles", idPrefix, data = {} } = {}
 
     if (sheet === "profiles") idPrefix = "EMP";
     if (sheet === "Engagements") idPrefix = "ENG";
-    if (sheet === "Seti_Updated") idPrefix = "SETI";
 
     const patch = { ...data };
+
+    if (sheet === "Seti_Updated") {
+      const idx = headerIndexMapNormalized(ws);
+      const idCol = idx.get("id");
+
+      if (idCol) {
+        const last = ws.actualRowCount || ws.rowCount || 1;
+        let max = 0;
+
+        for (let r = 2; r <= last; r++) {
+          const raw = text(cellToPlain(ws.getRow(r).getCell(idCol)));
+          const n = parseInt(String(raw).replace(/[^\d]/g, ""), 10);
+          if (!isNaN(n)) max = Math.max(max, n);
+        }
+
+        patch.id = String(max + 1);
+      }
+
+      ws.addRow(mapDataToHeaderRow(ws, patch));
+      await atomicSave(wb);
+      return patch;
+    }
 
     if (idPrefix) {
       const idx = headerIndexMapNormalized(ws);
       const idCol = idx.get("id");
       if (idCol) {
-        const next = (() => {
-          const last = ws.actualRowCount || ws.rowCount || 1;
-          let max = 0;
-          for (let r = 2; r <= last; r++) {
-            const val = text(cellToPlain(ws.getRow(r).getCell(idCol)));
-            const m = val.match(new RegExp(`^${idPrefix}-(\\d+)$`, "i"));
-            if (m) max = Math.max(max, parseInt(m[1], 10));
-          }
-          return `${idPrefix}-${String(max + 1).padStart(5, "0")}`;
-        })();
+        const last = ws.actualRowCount || ws.rowCount || 1;
+        let max = 0;
+        for (let r = 2; r <= last; r++) {
+          const val = text(cellToPlain(ws.getRow(r).getCell(idCol)));
+          const m = val.match(new RegExp(`^${idPrefix}-(\\d+)$`, "i"));
+          if (m) max = Math.max(max, parseInt(m[1], 10));
+        }
+        const next = `${idPrefix}-${String(max + 1).padStart(5, "0")}`;
         patch.id = patch.id || next;
       }
     }
@@ -712,6 +794,7 @@ export async function updateRow({ sheet = "profiles", id, key = "id", patch = {}
     prepareSheet(ws, sheet);
 
     const payload = data ?? patch ?? {};
+
     if (sheet === "Sites_List") {
       const idx = headerIndexMapNormalized(ws);
       const locCol = idx.get("location");
@@ -742,11 +825,10 @@ export async function updateRow({ sheet = "profiles", id, key = "id", patch = {}
       await atomicSave(wb);
 
       const out = rowToObject(ws, rowNumber);
-      out.id = out.Location; 
+      out.id = out.Location;
       return out;
     }
 
-  
     const idx = headerIndexMapNormalized(ws);
     const idCol = idx.get(normKey(key || "id"));
     if (!idCol) throw new Error(`Sheet ${sheet} has no ${key || "id"} column`);
