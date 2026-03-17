@@ -30,14 +30,16 @@ function cookieOptions() {
     secure: isProd,
     sameSite: "lax",
     path: "/",
-    maxAge: 7 * 24 * 60 * 60 * 1000,
+    maxAge: 2 * 24 * 60 * 60 * 1000, 
   };
 }
 
 function signToken(email) {
-  return jwt.sign({ sub: "admin", email, role: "admin" }, getJwtSecret(), {
-    expiresIn: "7d",
-  });
+  return jwt.sign(
+    { sub: "admin", email, role: "admin" },
+    getJwtSecret(),
+    { expiresIn: "2d" } 
+  );
 }
 
 router.post("/login", async (req, res) => {

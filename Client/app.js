@@ -2,13 +2,20 @@
 
 const API = "/api";
 
+const ACTIVE_SCHEDULE_STORAGE_KEY = "activeScheduleSheet";
+
+function saveActiveScheduleSheet(sheet) {
+  const value = String(sheet || "").trim();
+  if (value) localStorage.setItem(ACTIVE_SCHEDULE_STORAGE_KEY, value);
+  else localStorage.removeItem(ACTIVE_SCHEDULE_STORAGE_KEY);
+}
+
 const SHEET_MAP = {
   overview: "profiles",
   employees: "profiles",
   engagements: "Engagements",
   sites: "Sites_List",
-  schedule: "Seti_Updated",
-  gantt: "Seti_Updated",
+  tools: "Tools",
 };
 
 const ID_PREFIX_MAP = {
@@ -30,8 +37,27 @@ const store = {
   allEngagements: [],
   allSites: [],
   allSchedule: [],
+  scheduleProjects: [],
+  scheduleProjectRows: [],
+  activeScheduleSheet: restoreActiveScheduleSheet(),
+  scheduleProjectCache: {},
+  scheduleProjectSearch: "",
+  scheduleLoading: false,
+  scheduleGrids: [],
+  activeScheduleGrid: null,
+  currentScheduleProjectIndex: 0,
 };
-const SITE_STATUS_OPTIONS = ["Active", "Completed", "TBD"];
+
+const SITE_STATUS_OPTIONS = [
+  "Installation",
+  "Pre Commissioning",
+  "Wet Commissioning",
+  "Commissioned",
+];
+
+function restoreActiveScheduleSheet() {
+  return String(localStorage.getItem(ACTIVE_SCHEDULE_STORAGE_KEY) || "").trim();
+}
 
 // ================================================================
 // AUTH
@@ -75,6 +101,24 @@ async function apiFetch(url, options = {}) {
   }
   return res;
 }
+function getActiveScheduleSheet() {
+  return store.activeScheduleSheet || store.scheduleProjects[0]?.sheet || "";
+}
+
+function getSheetForView(view) {
+  if (view === "schedule" || view === "gantt") {
+    return getActiveScheduleSheet();
+  }
+  return SHEET_MAP[view] || "";
+}
+
+function prettifyProjectName(sheet) {
+  return String(sheet || "")
+    .replace(/_timeline$/i, "")
+    .replace(/_updated$/i, "")
+    .replace(/_/g, " ")
+    .trim();
+}
 
 async function apiLogin(email, password) {
   const res = await apiFetch(`${API}/auth/login`, {
@@ -87,7 +131,9 @@ async function apiLogin(email, password) {
 }
 
 async function apiLogout() {
-  await apiFetch(`${API}/auth/logout`, { method: "POST" }).catch(() => {});
+  await apiFetch(`${API}/auth/logout`, { method: "POST" });
+  localStorage.clear();
+  sessionStorage.clear();
 }
 
 async function apiMe() {
@@ -209,6 +255,7 @@ const views = {
   sites: { title: "Sites", columns: [] },
   schedule: { title: "Schedule", columns: [] },
   gantt: { title: "Gantt", columns: [] },
+  tools: { title: "Tools", columns: [] },
 };
 
 let chartInstances = {};
@@ -233,47 +280,71 @@ function tableEls() {
 
 function applyViewLayout() {
   const isOverview = store.view === "overview";
-  const isSchedule = store.view === "schedule";
-  const isGantt = store.view === "gantt";
+  const isSchedule = store.view === "schedule" || store.view === "gantt";
+
+  // body.is-schedule drives all CSS overrides for the flex chain
+  document.body.classList.toggle("is-schedule", isSchedule);
 
   const overviewView = document.getElementById("overviewView");
   const tableView = document.getElementById("tableView");
-
+  const scheduleLayout = document.getElementById("scheduleLayout");
+  const scheduleScroller = document.getElementById("scheduleScroller");
+  const scheduleSheet = document.getElementById("scheduleSheet");
+  const tableCard = document.querySelector("#tableView .table-card");
+  const tableToolbar = document.querySelector("#tableView .table-toolbar");
   const stats = document.getElementById("stats");
   const filterBar = document.getElementById("filterBar");
   const advancedFilters = document.getElementById("advancedFilters");
   const paginationBar = document.getElementById("paginationBar");
-  const rowsWrap = document.querySelector(".page-size-wrap");
-
-  const scheduleHeader = document.getElementById("scheduleHeader");
-  const scheduleLayout = document.getElementById("scheduleLayout");
   const defaultWrap = document.getElementById("defaultTableWrap");
+  const scheduleHeader = document.getElementById("scheduleHeader");
+  const btnOpenGantt = document.getElementById("btnOpenGantt");
 
-  const tableCard = document.querySelector("#tableView .table-card");
-
-  // main sections
+  // Step 1: Clear all inline cssText so CSS class rules take over
+  [
+    tableView,
+    tableCard,
+    scheduleLayout,
+    scheduleScroller,
+    scheduleSheet,
+  ].forEach((el) => {
+    if (el) el.style.cssText = "";
+  });
   if (overviewView) overviewView.style.display = isOverview ? "" : "none";
   if (tableView) tableView.style.display = isOverview ? "none" : "";
 
-  // table card MUST stay visible for schedule + gantt (because scheduleLayout is inside it)
-  if (tableCard) tableCard.style.display = isOverview ? "none" : "";
+  if (isSchedule) {
+    if (scheduleLayout) scheduleLayout.style.display = "flex";
+    if (scheduleScroller) scheduleScroller.style.display = "flex";
+    if (scheduleSheet) {
+      scheduleSheet.style.display = "flex";
+      scheduleSheet.classList.add("schedule-screen");
+    }
+    if (scheduleHeader) scheduleHeader.style.display = "none";
+    if (tableToolbar) tableToolbar.style.display = "";
+    if (stats) stats.style.display = "none";
+    if (filterBar) filterBar.style.display = "none";
+    if (advancedFilters) advancedFilters.style.display = "none";
+    if (paginationBar) paginationBar.style.display = "none";
+    if (defaultWrap) defaultWrap.style.display = "none";
+  } else {
+    if (scheduleSheet) {
+      scheduleSheet.style.display = "";
+      scheduleSheet.classList.remove("schedule-screen");
+    }
+    if (scheduleLayout) scheduleLayout.style.display = "none";
+    if (scheduleScroller) scheduleScroller.style.display = "";
+    if (scheduleHeader) scheduleHeader.style.display = "none";
+    if (tableCard) tableCard.style.display = isOverview ? "none" : "";
+    if (tableToolbar) tableToolbar.style.display = "";
+    if (defaultWrap) defaultWrap.style.display = !isOverview ? "" : "none";
+    if (stats) stats.style.display = "";
+    if (filterBar) filterBar.style.display = "";
+    if (advancedFilters) advancedFilters.style.display = "none";
+    if (paginationBar) paginationBar.style.display = "";
+  }
 
-  // schedule header + layout visible for schedule and gantt
-  if (scheduleHeader) scheduleHeader.style.display = isSchedule ? "" : "none";
-  if (scheduleLayout)
-    scheduleLayout.style.display = isSchedule || isGantt ? "" : "none";
-
-  // default table visible only for non-schedule views
-  if (defaultWrap)
-    defaultWrap.style.display =
-      !isOverview && !isSchedule && !isGantt ? "" : "none";
-
-  // gantt page should be “full” -> hide filters/stats/pagination/rows selector
-  if (stats) stats.style.display = isGantt ? "none" : "";
-  if (filterBar) filterBar.style.display = isGantt ? "none" : "";
-  if (advancedFilters) advancedFilters.style.display = "none";
-  if (paginationBar) paginationBar.style.display = isGantt ? "none" : "";
-  if (rowsWrap) rowsWrap.style.display = isGantt ? "none" : "";
+  if (btnOpenGantt) btnOpenGantt.style.display = "none";
 }
 
 function mountScheduleGanttButton() {
@@ -284,7 +355,7 @@ function mountScheduleGanttButton() {
   btn.onclick = async () => {
     store.view = "gantt";
     applyViewLayout();
-    await loadCurrentViewData();
+    await loadCurrentViewData({ resetPage: true });
     await renderGanttPage();
   };
 }
@@ -302,6 +373,155 @@ function wireGanttControls() {
 
   const zoom = document.getElementById("ganttZoomSelect");
   if (zoom) zoom.onchange = () => renderGanttPage();
+}
+function getToolsParentRows() {
+  return (store.data || []).filter((r) => {
+    const sn = String(r["S.N"] ?? r["s.n"] ?? "").trim();
+    const rowType = String(r.__rowType ?? "")
+      .trim()
+      .toLowerCase();
+    return !!sn && rowType !== "child";
+  });
+}
+
+function pickValue(row, names) {
+  for (const name of names) {
+    if (row[name] != null && String(row[name]).trim() !== "") return row[name];
+  }
+
+  const keys = Object.keys(row || {});
+  for (const wanted of names) {
+    const found = keys.find(
+      (k) =>
+        String(k).trim().toLowerCase() === String(wanted).trim().toLowerCase(),
+    );
+    if (found && row[found] != null && String(row[found]).trim() !== "") {
+      return row[found];
+    }
+  }
+
+  return "";
+}
+
+function toScheduleRow(row, index = 0) {
+  const taskName = pickValue(row, [
+    "Task Name",
+    "TASK NAME",
+    "Task Name / Milestone",
+    "Milestone",
+    "Task",
+    "Activity",
+    "Activities",
+    "Task name",
+    "Name",
+    "Work Item",
+    "Task Mode",
+    "ID",
+  ]);
+
+  const start =
+    pickValue(row, [
+      "Start Date",
+      "START DATE",
+      "Start",
+      "START",
+      "Starting Date",
+      "Planned Start",
+      "Begin Date",
+      "Begin",
+    ]) || "";
+
+  const end =
+    pickValue(row, [
+      "End Date",
+      "END DATE",
+      "Finish Date",
+      "FINISH DATE",
+      "Finish",
+      "FINISH",
+      "End",
+      "END",
+      "Planned Finish",
+      "Completion Date",
+    ]) || "";
+
+  let completion = pickValue(row, [
+    "% Completion",
+    "% Complete",
+    "% complete",
+    "Progress",
+    "Completion",
+    "Progress %",
+    "Percent Complete",
+  ]);
+
+  let duration =
+    pickValue(row, [
+      "Duration",
+      "Duration (days)",
+      "DURATION",
+      "Planned Duration",
+      "No. of Days",
+      "Days",
+    ]) || "";
+
+  const remarks = pickValue(row, [
+    "Remarks",
+    "Remark",
+    "Notes",
+    "Comments",
+    "Comment",
+    "Description",
+    "Notes / Section",
+  ]);
+
+  if (completion != null && String(completion).trim() !== "") {
+    const raw = String(completion).trim();
+    const n = Number(raw.replace(/[^\d.-]/g, ""));
+    if (Number.isFinite(n)) {
+      completion =
+        n > 0 && n <= 1 ? String(Math.round(n * 100)) : String(Math.round(n));
+    } else {
+      completion = "0";
+    }
+  } else {
+    completion = "0";
+  }
+
+  if (!String(duration).trim() && start && end) {
+    duration = String(calcDurationDays(start, end));
+  } else if (duration != null && typeof duration === "object") {
+    duration = "";
+  }
+
+  const out = {
+    id: pickValue(row, ["id", "ID", "Id"]) || `SCH-${index + 1}`,
+    taskName: taskName || "",
+    completion: completion || "0",
+    duration: duration || "",
+    startDate: start,
+    endDate: end,
+    remarks: remarks || "",
+  };
+
+  if (row.__highlight) out.__highlight = row.__highlight;
+  if (row.__isSection) out.__isSection = true;
+  if (row.__isTitle) out.__isTitle = true;
+
+  const hasTask = String(out.taskName).trim() !== "";
+  const hasDate =
+    String(out.startDate).trim() !== "" || String(out.endDate).trim() !== "";
+  const hasDuration = String(out.duration).trim() !== "";
+
+  if (!hasTask && !hasDate && !hasDuration) return null;
+
+  return out;
+}
+
+function getToolsRowKey(row) {
+  return String(
+    row.__rowKey ?? row.id ?? row["S.N"] ?? row["s.n"] ?? "",
+  ).trim();
 }
 
 function renderGanttPage() {
@@ -369,10 +589,10 @@ function mountToaster() {
 // NAVIGATION
 // ==============================
 
-document.querySelectorAll(".nav-link").forEach((btn) => {
+document.querySelectorAll(".nav-link[data-view]").forEach((btn) => {
   btn.addEventListener("click", async () => {
     const view = btn.dataset.view;
-    await setView(view);
+    await navigate(view, { pushHash: true });
   });
 });
 
@@ -543,7 +763,7 @@ async function fetchAllRows(sheet) {
   let all = [];
 
   while (true) {
-    const res = await fetch(
+    const res = await apiFetch(
       `${API}/rows?sheet=${encodeURIComponent(sheet)}&page=${page}&pageSize=${pageSize}`,
     );
     const json = await res.json();
@@ -558,13 +778,235 @@ async function fetchAllRows(sheet) {
   return all;
 }
 
+async function fetchWorkbookSheets() {
+  const res = await apiFetch(`${API}/excel/sheets`);
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) throw new Error(json.error || "Failed to load workbook sheets");
+  return Array.isArray(json.sheets) ? json.sheets : [];
+}
+
+async function fetchScheduleGrid(sheet) {
+  const res = await apiFetch(
+    `${API}/excel/grid?sheet=${encodeURIComponent(sheet)}`,
+  );
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok)
+    throw new Error(json.error || `Failed to load schedule grid for ${sheet}`);
+  return json;
+}
+
+// Convert a grid (from /api/excel/grid) into keyed-object rows
+// suitable for toScheduleRow(). The grid's first non-empty isHeader
+// row supplies column names; subsequent data rows are mapped to those keys.
+function gridToScheduleRows(grid) {
+  const rawRows = Array.isArray(grid?.rows) ? grid.rows : [];
+  if (!rawRows.length) return [];
+
+  // Find the header row (first row where isHeader === true)
+  const headerRow = rawRows.find((r) => r.isHeader);
+  const headers = headerRow
+    ? (headerRow.cells || []).map((c) => String(c.text ?? "").trim())
+    : [];
+
+  const results = [];
+  rawRows.forEach((row, ri) => {
+    if (row.isHeader) return; // skip header rows
+
+    const cells = row.cells || [];
+    const obj = {};
+
+    // Map by position to header name
+    headers.forEach((h, ci) => {
+      if (h) obj[h] = cells[ci]?.text ?? "";
+    });
+
+    // Preserve highlight flag (yellow rows have bg #FFFF00 or similar)
+    const firstCellBg = String(cells[0]?.bg || "").toLowerCase();
+    if (firstCellBg.includes("ffff00") || firstCellBg.includes("fff200")) {
+      obj.__highlight = "yellow";
+    }
+
+    // Preserve section/title metadata for row-type detection
+    obj.__isSection = !!row.isSection;
+    obj.__isTitle = !!row.isTitle;
+
+    results.push(obj);
+  });
+
+  return results;
+}
+
+function isScheduleProjectSheet(name) {
+  const s = String(name || "")
+    .trim()
+    .toLowerCase();
+
+  if (!s) return false;
+
+  if (
+    s === "profiles" ||
+    s === "engagements" ||
+    s === "sites_list" ||
+    s === "tools"
+  ) {
+    return false;
+  }
+
+  return (
+    s === "seti_updated" || s === "khudi_timeline" || s.endsWith("_timeline")
+  );
+}
+
+function getScheduleSheetCandidates(allSheets) {
+  return (allSheets || []).filter(isScheduleProjectSheet);
+}
+async function loadScheduleProjects() {
+  const workbookSheets = await fetchWorkbookSheets();
+  const sheets = getScheduleSheetCandidates(workbookSheets);
+
+  store.scheduleProjects = sheets.map((sheet) => ({
+    sheet,
+    title: sheet.replace(/_Timeline$/i, "").replace(/_/g, " "),
+  }));
+
+  const saved = restoreActiveScheduleSheet();
+  if (!store.activeScheduleSheet && saved) {
+    store.activeScheduleSheet = saved;
+  }
+
+  const exists = store.scheduleProjects.some(
+    (p) => p.sheet === store.activeScheduleSheet,
+  );
+
+  if (!store.activeScheduleSheet && store.scheduleProjects.length) {
+    store.activeScheduleSheet = store.scheduleProjects[0].sheet;
+  } else if (store.activeScheduleSheet && !exists) {
+    store.activeScheduleSheet = store.scheduleProjects[0]?.sheet || "";
+  }
+
+  saveActiveScheduleSheet(store.activeScheduleSheet);
+  return store.scheduleProjects;
+}
+
+function getActiveScheduleProject() {
+  return (
+    (store.scheduleProjects || []).find(
+      (p) => p.sheet === store.activeScheduleSheet,
+    ) || null
+  );
+}
+
+async function loadScheduleProjectRows(sheet, { force = false } = {}) {
+  const targetSheet = String(sheet || "").trim();
+  if (!targetSheet) return { sheet: "", title: "", rows: [] };
+
+  if (!force && store.scheduleProjectCache[targetSheet]) {
+    return store.scheduleProjectCache[targetSheet];
+  }
+
+  let rows = [];
+
+  try {
+    const grid = await fetchScheduleGrid(targetSheet);
+    const keyed = gridToScheduleRows(grid);
+    rows = keyed.map((row, index) => toScheduleRow(row, index)).filter(Boolean);
+  } catch (gridErr) {
+    console.warn(
+      "Grid fetch failed, falling back to rows API:",
+      targetSheet,
+      gridErr?.message || gridErr,
+    );
+    try {
+      const rawRows = await fetchAllRows(targetSheet);
+      rows = rawRows
+        .map((row, index) => toScheduleRow(row, index))
+        .filter(Boolean);
+    } catch (rowErr) {
+      console.error("Both schedule fetch methods failed:", targetSheet, rowErr);
+      rows = [];
+    }
+  }
+
+  const project = (store.scheduleProjects || []).find(
+    (p) => p.sheet === targetSheet,
+  );
+  const result = {
+    sheet: targetSheet,
+    title: project?.title || prettifyProjectName(targetSheet),
+    rows,
+  };
+
+  store.scheduleProjectCache[targetSheet] = result;
+  return result;
+}
+
+async function loadAllScheduleProjectRows() {
+  await loadScheduleProjects();
+  const results = [];
+  for (const project of store.scheduleProjects || []) {
+    results.push(await loadScheduleProjectRows(project.sheet));
+  }
+  store.scheduleProjectRows = results;
+  return results;
+}
+
+async function refreshScheduleState(
+  sheet = getActiveScheduleSheet(),
+  { resetPage = false } = {},
+) {
+  await loadScheduleProjects();
+
+  const targetSheet = String(sheet || getActiveScheduleSheet() || "").trim();
+  if (targetSheet) {
+    store.activeScheduleSheet = targetSheet;
+    saveActiveScheduleSheet(targetSheet);
+    delete store.scheduleProjectCache?.[targetSheet];
+  }
+
+  const activeProject = getActiveScheduleProject();
+  const projectData = activeProject
+    ? await loadScheduleProjectRows(activeProject.sheet, { force: true })
+    : { sheet: "", title: "", rows: [] };
+
+  store.scheduleProjectRows = projectData.sheet ? [projectData] : [];
+  store.data = Array.isArray(projectData.rows) ? projectData.rows.slice() : [];
+  store.allSchedule = store.data.slice();
+  views.schedule.columns = inferColumnsFromData(store.data, "schedule");
+  views.gantt.columns = inferColumnsFromData(store.data, "gantt");
+
+  if (resetPage) store.page = 1;
+  render();
+  return projectData;
+}
+
+async function loadScheduleGrids() {
+  const workbookSheets = await fetchWorkbookSheets().catch(() => []);
+  const targets = getScheduleSheetCandidates(workbookSheets);
+
+  console.log("All workbook sheets:", workbookSheets);
+  console.log("Schedule target sheets:", targets);
+
+  const grids = [];
+  for (const sheet of targets) {
+    try {
+      const grid = await fetchScheduleGrid(sheet);
+      console.log("Loaded schedule grid:", sheet, grid);
+      if (grid?.rows?.length) grids.push(grid);
+    } catch (err) {
+      console.error("schedule grid load failed:", sheet, err);
+    }
+  }
+
+  store.scheduleGrids = grids;
+  return grids;
+}
+
 async function apiCreateRow(sheet, view, data) {
-  const idPrefix = view === "schedule" ? "" : (ID_PREFIX_MAP[view] || "ROW");
-  const res = await fetch(
+  const idPrefix = view === "schedule" ? "" : ID_PREFIX_MAP[view] || "ROW";
+  const res = await apiFetch(
     `${API}/rows?sheet=${encodeURIComponent(sheet)}&idPrefix=${encodeURIComponent(idPrefix)}`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     },
   );
@@ -576,11 +1018,10 @@ async function apiCreateRow(sheet, view, data) {
 async function apiUpdateRow(sheet, id, patch) {
   const key = sheet === "Sites_List" ? "Location" : "id";
 
-  const res = await fetch(
+  const res = await apiFetch(
     `${API}/rows/${encodeURIComponent(id)}?sheet=${encodeURIComponent(sheet)}&key=${encodeURIComponent(key)}`,
     {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     },
   );
@@ -591,7 +1032,7 @@ async function apiUpdateRow(sheet, id, patch) {
 }
 
 async function apiDeleteRow(sheet, id) {
-  const res = await fetch(
+  const res = await apiFetch(
     `${API}/rows/${encodeURIComponent(id)}?sheet=${encodeURIComponent(sheet)}`,
     { method: "DELETE" },
   );
@@ -599,6 +1040,7 @@ async function apiDeleteRow(sheet, id) {
   if (!json.ok) throw new Error(json.error || "Delete failed");
   return true;
 }
+
 function renderGantt(container, rows, opts = {}) {
   container.innerHTML = "";
 
@@ -614,51 +1056,44 @@ function renderGantt(container, rows, opts = {}) {
 
   const parse = (v) => {
     if (!v) return null;
-    const d = new Date(v);
-    return isNaN(d) ? null : startOfDay(d);
+    const d = parseAnyDate(v);
+    return d && !isNaN(d.getTime()) ? startOfDay(d) : null;
   };
 
   const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
-
   const toISO = (d) => d.toISOString().slice(0, 10);
-
-  // ISO week number (to match PDF style W4, W5...)
-  const isoWeek = (date) => {
-    const d = new Date(
-      Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
-    );
-    const dayNum = d.getUTCDay() || 7;
-    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-    return Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
-  };
 
   const tasks = (Array.isArray(rows) ? rows : [])
     .map((r, i) => {
-      const s = parse(r.Start);
-      const f = parse(r.Finish);
-      const durStr = String(r.Duration ?? "");
-      const pct =
-        parseFloat(String(r["% Complete"] ?? 0).replace("%", "")) || 0;
+      const s = parse(r.startDate);
+      const f = parse(r.endDate);
+      const durStr = String(r.duration ?? "").trim();
+      const pct = parseFloat(String(r.completion ?? 0).replace("%", "")) || 0;
 
-      // milestone if start==finish AND duration looks like 0 days (safe)
-      const isMilestone = !!(s && f && +s === +f && /\b0\b/.test(durStr));
+      const name = String(r.taskName ?? "").trim();
 
-      // summary heuristic (optional)
-      const name = String(r["Task Name"] ?? "");
-      const isSummary = /scope|project|procurement|design|powerhouse/i.test(
-        name,
-      );
+      let finish = f;
+      if (!finish && s && durStr) {
+        const durNum = parseFloat(durStr);
+        if (Number.isFinite(durNum) && durNum > 0) {
+          finish = new Date(s);
+          finish.setDate(
+            finish.getDate() + Math.max(0, Math.round(durNum) - 1),
+          );
+        }
+      }
+
+      const isMilestone = !!(s && finish && +s === +finish);
 
       return {
-        id: r.ID || i + 1,
+        id: r.id || i + 1,
         name,
         start: s,
-        finish: f,
+        finish,
         pct: clamp(pct, 0, 100),
         duration: durStr,
-        predecessors: r.Predecessors || "",
-        isSummary,
+        predecessors: "",
+        isSummary: false,
         isMilestone,
       };
     })
@@ -666,11 +1101,10 @@ function renderGantt(container, rows, opts = {}) {
 
   if (!tasks.length) {
     container.innerHTML =
-      "<div style='padding:18px;font-weight:800'>No schedule data</div>";
+      "<div style='padding:18px;font-weight:800'>No valid gantt data</div>";
     return;
   }
 
-  // range
   let min = tasks.reduce((a, b) => (a < b.start ? a : b.start), tasks[0].start);
   let max = tasks.reduce(
     (a, b) => (a > b.finish ? a : b.finish),
@@ -694,11 +1128,19 @@ function renderGantt(container, rows, opts = {}) {
     return x;
   };
 
-  // --- wrapper
+  const isoWeek = (date) => {
+    const d = new Date(
+      Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
+    );
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    return Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+  };
+
   const wrap = document.createElement("div");
   wrap.className = "gantt-container";
 
-  // ================= LEFT TABLE =================
   const left = document.createElement("div");
   left.className = "gantt-left";
 
@@ -721,10 +1163,10 @@ function renderGantt(container, rows, opts = {}) {
     row.style.height = rowHeight + "px";
 
     row.innerHTML = `
-      <div>${t.id}</div>
-      <div class="gantt-taskname">${t.name}</div>
-      <div>${toISO(t.start)}</div>
-      <div>${toISO(t.finish)}</div>
+      <div>${esc(t.id)}</div>
+      <div class="gantt-taskname">${esc(t.name)}</div>
+      <div>${esc(toISO(t.start))}</div>
+      <div>${esc(toISO(t.finish))}</div>
       <div>${Math.round(t.pct)}%</div>
     `;
     leftBody.appendChild(row);
@@ -732,25 +1174,20 @@ function renderGantt(container, rows, opts = {}) {
 
   left.appendChild(leftBody);
 
-  // ================= RIGHT SIDE =================
   const rightOuter = document.createElement("div");
   rightOuter.className = "gantt-right-outer";
 
-  // --- sticky timeline header (YEAR + WEEKS)
   const head = document.createElement("div");
   head.className = "gantt-right-head";
 
-  // YEAR row (like PDF “2025”)
   const yearsRow = document.createElement("div");
   yearsRow.className = "gantt-head-years";
   yearsRow.style.width = timelineWidth + "px";
 
-  // WEEKS row (W4, W5...)
   const weeksRow = document.createElement("div");
   weeksRow.className = "gantt-head-weeks";
   weeksRow.style.width = timelineWidth + "px";
 
-  // Build year blocks (accurate across multiple years)
   let yCursor = new Date(min.getFullYear(), 0, 1);
   yCursor = startOfDay(yCursor);
 
@@ -776,7 +1213,6 @@ function renderGantt(container, rows, opts = {}) {
     yCursor = nextYear;
   }
 
-  // Build ISO week labels every 7 days
   for (let d = 0; d < totalDays; d += 7) {
     const dt = addDays(min, d);
     const wk = isoWeek(dt);
@@ -791,12 +1227,10 @@ function renderGantt(container, rows, opts = {}) {
   head.appendChild(yearsRow);
   head.appendChild(weeksRow);
 
-  // --- scrollable timeline body
   const right = document.createElement("div");
   right.className = "gantt-right";
   right.style.width = timelineWidth + "px";
 
-  // grid lines (daily thin, weekly stronger)
   const grid = document.createElement("div");
   grid.className = "gantt-grid";
   grid.style.width = timelineWidth + "px";
@@ -810,7 +1244,6 @@ function renderGantt(container, rows, opts = {}) {
 
   right.appendChild(grid);
 
-  // today line
   const today = startOfDay(new Date());
   if (today >= min && today <= max) {
     const offset = Math.floor((today - min) / 86400000);
@@ -820,7 +1253,6 @@ function renderGantt(container, rows, opts = {}) {
     right.appendChild(tline);
   }
 
-  // bars
   tasks.forEach((t, i) => {
     const offset = Math.floor((t.start - min) / 86400000);
     const duration = Math.max(
@@ -840,7 +1272,7 @@ function renderGantt(container, rows, opts = {}) {
     }
 
     const bar = document.createElement("div");
-    bar.className = "gantt-bar" + (t.isSummary ? " summary" : "");
+    bar.className = "gantt-bar";
     bar.style.top = top + "px";
     bar.style.left = offset * dayWidth + "px";
     bar.style.width = duration * dayWidth + "px";
@@ -858,18 +1290,15 @@ function renderGantt(container, rows, opts = {}) {
     right.appendChild(bar);
   });
 
-  // legend
   const legend = document.createElement("div");
   legend.className = "gantt-legend";
   legend.innerHTML = `
     <div class="gl-item"><span class="gl-swatch bar"></span>Task</div>
-    <div class="gl-item"><span class="gl-swatch summary"></span>Summary</div>
     <div class="gl-item"><span class="gl-swatch milestone"></span>Milestone</div>
     <div class="gl-item"><span class="gl-swatch progress"></span>Progress</div>
     <div class="gl-item"><span class="gl-swatch today"></span>Today</div>
   `;
 
-  // assemble right side
   rightOuter.appendChild(head);
 
   const bodyWrap = document.createElement("div");
@@ -890,73 +1319,47 @@ function renderGantt(container, rows, opts = {}) {
 }
 
 function inferColumnsFromData(rows, viewName) {
-  const first = rows[0] || {};
-  if (viewName === "schedule") {
-    const keys = Object.keys(first || {});
-    const find = (re) => keys.find((k) => re.test(String(k))) || null;
-
-    const kID = find(/^id$/i) || "ID";
-    const kMode = find(/task\s*mode/i) || "Task Mode";
-    const kPct = find(/%\s*complete/i) || "% Complete";
-    const kName = find(/task\s*name/i) || "Task Name";
-    const kDur = find(/^duration/i) || "Duration";
-    const kStart = find(/^start$/i) || "Start";
-    const kFinish = find(/^finish$/i) || "Finish";
-    const kPred = find(/predecess/i) || "Predecessors";
-
+  rows = Array.isArray(rows) ? rows : [];
+  if (viewName === "schedule" || viewName === "gantt") {
     return [
       {
-        key: kID,
-        label: "ID",
-        type: "number",
-        filterable: true,
-        sortable: true,
-      },
-      {
-        key: kMode,
-        label: "Task Mode",
-        type: "text",
-        filterable: true,
-        sortable: true,
-      },
-      {
-        key: kPct,
-        label: "% Complete",
-        type: "number",
-        filterable: true,
-        sortable: true,
-      },
-      {
-        key: kName,
+        key: "taskName",
         label: "Task Name",
         type: "text",
         filterable: true,
         sortable: true,
       },
       {
-        key: kDur,
+        key: "completion",
+        label: "% Completion",
+        type: "number",
+        filterable: true,
+        sortable: true,
+      },
+      {
+        key: "duration",
         label: "Duration",
-        type: "text",
+        type: "number",
         filterable: true,
         sortable: true,
       },
       {
-        key: kStart,
-        label: "Start",
+        key: "startDate",
+        label: "Start Date",
         type: "date",
         filterable: true,
         sortable: true,
       },
       {
-        key: kFinish,
-        label: "Finish",
+        key: "endDate",
+        label: "End Date",
         type: "date",
         filterable: true,
         sortable: true,
       },
       {
-        key: kPred,
-        label: "Predecessors",
+        key: "remarks",
+        label: "Remarks",
         type: "text",
         filterable: true,
         sortable: true,
@@ -964,21 +1367,44 @@ function inferColumnsFromData(rows, viewName) {
     ];
   }
 
+  const first = rows[0] || {};
+
   return Object.keys(first)
     .filter((key) => {
-      const lower = key.toLowerCase();
+      const lower = String(key).trim().toLowerCase();
+
       if (viewName === "sites" && lower === "id") return false;
-      if (viewName === "schedule" && isStatusKey(key)) return false;
+
+      if (viewName === "tools" && lower === "id") return false;
+      if (viewName === "tools" && lower === "__rowkey") return false;
+      if (viewName === "tools" && lower === "__rowtype") return false;
+      if (viewName === "tools" && lower === "__parentsn") return false;
+
       return true;
     })
     .map((key) => {
-      const lk = key.toLowerCase();
-      const type =
+      const lk = String(key).trim().toLowerCase();
+
+      let type = "text";
+
+      if (
         lk.includes("date") ||
         lk.includes("createdat") ||
         lk.includes("updatedat")
-          ? "date"
-          : "text";
+      ) {
+        type = "date";
+      }
+
+      if (
+        lk === "s.n" ||
+        lk === "sn" ||
+        lk === "s n" ||
+        lk === "qty" ||
+        lk === "quantity" ||
+        lk === "id"
+      ) {
+        type = "number";
+      }
 
       return {
         key,
@@ -990,39 +1416,6 @@ function inferColumnsFromData(rows, viewName) {
     });
 }
 
-function generateTaskMode(row) {
-  const name = String(row["Task Name"] ?? row["TASK NAME"] ?? "").trim();
-  const start = row["Start"] ?? row["START"];
-  const finish = row["Finish"] ?? row["FINISH"];
-
-  const durRaw =
-    row["Duration (days)"] ??
-    row["Duration"] ??
-    row["DURATION (DAYS)"] ??
-    row["DURATION"];
-
-  const durNum = toNum(durRaw);
-  const dur = durNum != null ? durNum : calcDurationDays(start, finish);
-
-  // If it looks like a heading/section row (common in schedules)
-  if (name && !start && !finish && (dur === "" || dur === 0)) {
-    return "Summary";
-  }
-
-  // Milestone: 0-day duration OR same start & finish
-  const s = toDateOnly(start);
-  const f = toDateOnly(finish);
-  if (dur === 0 || (s && f && s.getTime() === f.getTime())) {
-    return "Milestone";
-  }
-
-  // If no dates at all but has a name
-  if (name && !start && !finish) {
-    return "Task";
-  }
-
-  return "Task";
-}
 function toDateOnly(v) {
   if (!v) return null;
   const d = v instanceof Date ? v : new Date(v);
@@ -1034,7 +1427,7 @@ function calcDurationDays(start, finish) {
   const s = toDateOnly(start);
   const f = toDateOnly(finish);
   if (!s || !f) return "";
-  return Math.max(0, Math.round((f - s) / 86400000));
+  return Math.max(0, Math.round((f - s) / 86400000) + 1);
 }
 
 function getScheduleField(row, names) {
@@ -1059,6 +1452,8 @@ function generateTaskMode(row) {
     "FINISH",
     "Finish Date",
     "FINISH DATE",
+    "End Date",
+    "END DATE",
   ]);
   const durRaw = getScheduleField(row, [
     "Duration (days)",
@@ -1072,13 +1467,11 @@ function generateTaskMode(row) {
     ? durNum
     : calcDurationDays(start, finish);
 
-  // "Summary" heuristic (group/header row)
   if (name && !start && !finish && (dur === "" || dur === 0)) return "Summary";
 
   const s = toDateOnly(start);
   const f = toDateOnly(finish);
 
-  // milestone: 0 duration OR same day
   if (dur === 0 || (s && f && s.getTime() === f.getTime())) return "Milestone";
 
   return "Task";
@@ -1092,28 +1485,64 @@ function clamp01(n) {
 
 async function loadAllData() {
   const statusPill = el("statusPill");
+
   try {
-    const [employees, engagements, sites, schedule] = await Promise.all([
+    const projectRows = await loadAllScheduleProjectRows();
+    const firstScheduleSheet = getActiveScheduleSheet();
+
+    const [employees, engagements, sites, schedule, tools] = await Promise.all([
       fetchAllRows(SHEET_MAP.employees).catch(() => []),
       fetchAllRows(SHEET_MAP.engagements).catch(() => []),
       fetchAllRows(SHEET_MAP.sites).catch(() => []),
-      fetchAllRows(SHEET_MAP.schedule).catch(() => []),
+      firstScheduleSheet
+        ? fetchScheduleGrid(firstScheduleSheet)
+            .then((grid) => {
+              const keyed = gridToScheduleRows(grid);
+              return keyed
+                .map((row, index) => toScheduleRow(row, index))
+                .filter(Boolean);
+            })
+            .catch(() =>
+              fetchAllRows(firstScheduleSheet)
+                .then((rows) =>
+                  rows.map((r, i) => toScheduleRow(r, i)).filter(Boolean),
+                )
+                .catch(() => []),
+            )
+        : Promise.resolve([]),
+      fetchAllRows(SHEET_MAP.tools).catch(() => []),
     ]);
 
-    store.allEmployees = employees;
-    store.allEngagements = engagements;
-    store.allSites = sites;
+    const safeEmployees = Array.isArray(employees) ? employees : [];
+    const safeEngagements = Array.isArray(engagements) ? engagements : [];
+    const safeSites = Array.isArray(sites) ? sites : [];
+    const safeSchedule = Array.isArray(schedule) ? schedule : [];
+    const safeTools = Array.isArray(tools) ? tools : [];
 
-    store.allSchedule = schedule;
-    views.employees.columns = inferColumnsFromData(employees, "employees");
+    store.allEmployees = safeEmployees;
+    store.allEngagements = safeEngagements;
+    store.allSites = safeSites;
+    store.allSchedule = safeSchedule;
+    store.allTools = safeTools;
+    store.scheduleProjectRows = Array.isArray(projectRows) ? projectRows : [];
+
+    views.employees.columns = inferColumnsFromData(safeEmployees, "employees");
     views.engagements.columns = inferColumnsFromData(
-      engagements,
+      safeEngagements,
       "engagements",
     );
-    views.sites.columns = inferColumnsFromData(sites, "sites");
-    views.schedule.columns = inferColumnsFromData(schedule, "schedule");
+    views.sites.columns = inferColumnsFromData(safeSites, "sites");
+    views.schedule.columns = inferColumnsFromData(safeSchedule, "schedule");
+    views.gantt.columns = inferColumnsFromData(safeSchedule, "gantt");
+    views.tools.columns = inferColumnsFromData(safeTools, "tools");
+
     const hasData =
-      employees.length || engagements.length || sites.length || schedule.length;
+      safeEmployees.length ||
+      safeEngagements.length ||
+      safeSites.length ||
+      safeSchedule.length ||
+      safeTools.length ||
+      store.scheduleProjectRows.length;
 
     if (statusPill) {
       statusPill.classList.remove("error");
@@ -1136,6 +1565,7 @@ async function loadAllData() {
     );
   }
 }
+
 const DEFAULT_VIEW = "overview";
 
 function isValidView(v) {
@@ -1170,31 +1600,55 @@ async function navigate(view, { pushHash = true } = {}) {
   if (store.view === "gantt") await renderGanttPage();
 }
 
-async function loadCurrentViewData() {
-  const sheet = SHEET_MAP[store.view];
-  if (!sheet) {
-    store.data = [];
-    render();
-    return;
-  }
-
-  const titleBase = views[store.view].title;
+async function loadCurrentViewData({
+  resetPage = false,
+  goToLastPage = false,
+} = {}) {
+  const sheet = getSheetForView(store.view);
 
   try {
-    let rows = await fetchAllRows(sheet);
     if (store.view === "schedule" || store.view === "gantt") {
-      rows = rows.map(computeScheduleFields);
-    }
-    store.data = rows;
+      await loadScheduleProjects();
+      const activeProject = getActiveScheduleProject();
+      const projectData = activeProject
+        ? await loadScheduleProjectRows(activeProject.sheet)
+        : { sheet: "", title: "", rows: [] };
 
+      store.scheduleProjectRows = projectData.sheet ? [projectData] : [];
+      store.data = Array.isArray(projectData.rows)
+        ? projectData.rows.slice()
+        : [];
+      store.allSchedule = store.data.slice();
+
+      views.schedule.columns = inferColumnsFromData(store.data, "schedule");
+      views.gantt.columns = inferColumnsFromData(store.data, "gantt");
+
+      const totalPages = Math.max(
+        1,
+        Math.ceil((store.data.length || 0) / store.pageSize),
+      );
+
+      if (resetPage) {
+        store.page = 1;
+      } else if (goToLastPage) {
+        store.page = totalPages;
+      } else if (store.page > totalPages) {
+        store.page = totalPages;
+      }
+
+      render();
+      return;
+    }
+
+    let rows = await fetchAllRows(sheet);
+
+    store.data = rows;
     if (store.view === "employees") store.allEmployees = rows;
     if (store.view === "engagements") store.allEngagements = rows;
     if (store.view === "sites") store.allSites = rows;
-    if (store.view === "schedule" || store.view === "gantt")
-      store.allSchedule = rows;
-    views[store.view].columns = inferColumnsFromData(rows, store.view);
+    if (store.view === "tools") store.allTools = rows;
 
-    store.page = 1;
+    views[store.view].columns = inferColumnsFromData(rows, store.view);
     render();
   } catch (err) {
     toast("error", "Failed to load current view", err.message);
@@ -1385,33 +1839,44 @@ function computeScheduleFields(row) {
   return obj;
 }
 
-function toDateOnly(v) {
-  const d = v instanceof Date ? v : new Date(v);
-  if (isNaN(d.getTime())) return null;
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
-
-function calcDurationDays(start, finish) {
-  const s = toDateOnly(start);
-  const f = toDateOnly(finish);
-  if (!s || !f) return "";
-  return Math.max(0, Math.round((f - s) / 86400000));
-}
-
 function toNum(v) {
   const n = Number(String(v ?? "").trim());
   return Number.isFinite(n) ? n : null;
 }
 
-function calcDurationDays(start, finish) {
-  const s = new Date(start);
-  const f = new Date(finish);
-  if (isNaN(s.getTime()) || isNaN(f.getTime())) return "";
+async function downloadExcelExport() {
+  const url = `${API}/excel/download?mode=full&ts=${Date.now()}`;
 
-  const s0 = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-  const f0 = new Date(f.getFullYear(), f.getMonth(), f.getDate());
-  return Math.max(0, Math.round((f0 - s0) / 86400000));
+  try {
+    const res = await apiFetch(url);
+
+    if (!res.ok) {
+      let msg = "Export failed";
+      try {
+        const json = await res.json();
+        msg = json.error || msg;
+      } catch {}
+      throw new Error(msg);
+    }
+
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = "troyer_full_dashboard_export.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+
+    toast("success", "Excel downloaded successfully");
+  } catch (err) {
+    toast("error", "Excel export failed", err.message || "Download failed");
+  }
 }
+
 function formatDateMDY(v) {
   if (v == null || v === "") return "";
 
@@ -1585,335 +2050,1483 @@ function parseAnyDateSched(v) {
   return isNaN(d.getTime()) ? null : d;
 }
 
-function renderScheduleSheet() {
-  const mount = el("scheduleSheet");
-  if (!mount) return;
+function formatGridDateText(value) {
+  const d = value ? new Date(value) : null;
+  if (!d || isNaN(d.getTime())) return String(value ?? "");
+  const month = d.toLocaleString("en-US", { month: "short" });
+  const day = String(d.getDate());
+  const yy = String(d.getFullYear()).slice(-2);
+  return `${day}-${month}-${yy}`;
+}
 
-  const isFullGantt = store.view === "gantt";
+function escapeAttr(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
 
-  // Pull schedule rows even on the dedicated Gantt page
-  const __prevView = store.view;
-  const __prevData = store.data;
-  store.view = "schedule";
-  store.data = (store.allSchedule || []).slice();
-  const rows = deriveRows(); // filtered + sorted using Schedule rules
-  store.view = __prevView;
-  store.data = __prevData;
-  el("rowCount").textContent = rows.length.toLocaleString();
+// ================================================================
+// SCHEDULE GANTT — Definitive implementation
+// ================================================================
 
-  if (!rows.length) {
-    mount.innerHTML = `<div class="gantt-empty">No schedule records</div>`;
-    return;
+(function _sgCSS() {
+  if (document.getElementById("_sg_css")) return;
+  const s = document.createElement("style");
+  s.id = "_sg_css";
+  s.textContent = `
+
+/* ── Shell ─────────────────────────────────────────────────────── */
+.sg {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #fff;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 12px;
+}
+
+/* ── Project tab bar ────────────────────────────────────────────── */
+.sg-topbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: #f4fbf4;
+  border-bottom: 2px solid #1d5c2e;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.sg-tab {
+  padding: 5px 18px;
+  border: 1.5px solid #a8cca8;
+  border-radius: 20px;
+  background: #fff;
+  color: #2e7d32;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .15s;
+  font-family: inherit;
+}
+.sg-tab:hover { background: #e8f5e9; border-color: #2e7d32; }
+.sg-tab.active {
+  background: #1d5c2e;
+  color: #fff;
+  border-color: #1d5c2e;
+  box-shadow: 0 2px 8px rgba(29,92,46,.3);
+}
+.sg-tab-add {
+  padding: 5px 14px;
+  border: 1.5px dashed #66bb6a;
+  border-radius: 20px;
+  background: transparent;
+  color: #2e7d32;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all .15s;
+  font-family: inherit;
+}
+.sg-tab-add:hover { background: #e8f5e9; border-color: #2e7d32; }
+
+/* ── Toolbar ────────────────────────────────────────────────────── */
+.sg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #fff;
+  border-bottom: 1px solid #e0ece0;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.sg-toolbar-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.sg-proj-name { font-weight: 700; font-size: 14px; color: #1d5c2e; }
+.sg-badge {
+  padding: 2px 10px;
+  background: #e8f5e9;
+  color: #2e7d32;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sg-zoom-wrap { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: #555; }
+.sg-zoom-wrap input[type=range] {
+  -webkit-appearance: none;
+  width: 100px;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, #1d5c2e var(--pct,40%), #ddd var(--pct,40%));
+  outline: none;
+  cursor: pointer;
+}
+.sg-zoom-wrap input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #1d5c2e;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.25);
+  cursor: pointer;
+}
+.sg-zoom-label { font-weight: 600; color: #1d5c2e; min-width: 28px; font-size: 11px; }
+
+
+/* ── THE scroll wrapper ──────────────────────────────────────────
+   overflow-x:scroll = horizontal scrollbar ALWAYS visible.
+   overflow-y:auto   = vertical only when needed.
+────────────────────────────────────────────────────────────────── */
+.sg-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: scroll;
+  overflow-y: auto;
+  position: relative;
+  -webkit-overflow-scrolling: touch;
+}
+.sg-scroll::-webkit-scrollbar { width: 8px; height: 11px; }
+.sg-scroll::-webkit-scrollbar-track { background: #eef4ee; border-radius: 0; }
+.sg-scroll::-webkit-scrollbar-thumb {
+  background: #7db87d;
+  border-radius: 6px;
+  border: 2px solid #eef4ee;
+  min-width: 50px;
+}
+.sg-scroll::-webkit-scrollbar-thumb:hover { background: #1d5c2e; }
+.sg-scroll::-webkit-scrollbar-corner { background: #eef4ee; }
+.sg-scroll { scrollbar-width: thin; scrollbar-color: #7db87d #eef4ee; }
+
+/* ── Table ───────────────────────────────────────────────────────
+   CRITICAL: border-collapse:collapse BREAKS position:sticky.
+   Use border-collapse:separate + careful border management.
+────────────────────────────────────────────────────────────────── */
+.sg-tbl {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  white-space: nowrap;
+  min-width: max-content;
+  font-size: 11.5px;
+}
+
+/* All cells: right + bottom border only */
+.sg-tbl th, .sg-tbl td {
+  border-right: 1px solid #c8ddc8;
+  border-bottom: 1px solid #c8ddc8;
+  height: 26px;
+  line-height: 26px;
+  vertical-align: middle;
+  overflow: hidden;
+  padding: 0 6px;
+  box-sizing: border-box;
+}
+
+/* Left border only on the first frozen column */
+.sg-tbl .fc-first {
+  border-left: 1px solid #c8ddc8;
+}
+
+/* ── Sticky frozen left columns ──────────────────────────────────
+   z-index ladder: body fc=3, thead fc=6, thead actions=7
+────────────────────────────────────────────────────────────────── */
+.sg-tbl .fc { position: sticky; z-index: 3; background: inherit; }
+.sg-tbl thead .fc { z-index: 6; }
+
+/* Drop shadow on the actions column to visually separate frozen from scroll */
+.sg-tbl .fc-shadow {
+  box-shadow: 3px 0 8px -2px rgba(0,0,0,.15);
+  z-index: 4;
+}
+.sg-tbl thead .fc-shadow { z-index: 7; }
+
+/* ── Header rows ─────────────────────────────────────────────────
+   3 rows: [col labels + month groups] [month per-day] [day numbers]
+   All 3 are sticky-top at different offsets.
+────────────────────────────────────────────────────────────────── */
+
+/* Row H1 — column labels (left) + month group (right) */
+.sg-h1 th {
+  background: #1d5c2e !important;
+  color: #fff !important;
+  font-weight: 700;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  text-align: center;
+  white-space: normal;
+  line-height: 1.3;
+  padding: 4px 6px;
+  height: 40px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  border-bottom: 1px solid #145220;
+}
+.sg-h1 th.fc { z-index: 7; }
+
+/* Row H2 — month name per-column (date cols only) */
+.sg-h2 th {
+  background: #2e7d32 !important;
+  color: rgba(255,255,255,.9) !important;
+  font-size: 8.5px;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 0 1px;
+  height: 12px;
+  line-height: 12px;
+  position: sticky;
+  top: 40px;
+  z-index: 5;
+  border-bottom: 1px solid #1a5c1e;
+}
+.sg-h2 th.fc {
+  z-index: 7;
+  background: #1d5c2e !important;
+  height: 0; line-height: 0; padding: 0; border: none; overflow: hidden;
+}
+
+/* Row H3 — day numbers */
+.sg-h3 th {
+  background: #388e3c !important;
+  color: rgba(255,255,255,.75) !important;
+  font-size: 8px;
+  font-weight: 400;
+  text-align: center;
+  padding: 0;
+  height: 10px;
+  line-height: 10px;
+  position: sticky;
+  top: 52px;
+  z-index: 5;
+  border-bottom: 2px solid #1a5228;
+}
+.sg-h3 th.fc {
+  z-index: 7;
+  background: #1d5c2e !important;
+  height: 0; line-height: 0; padding: 0; border-bottom: 2px solid #1a5228; overflow: hidden;
+}
+
+/* Top border on very first row of thead */
+.sg-h1 th { border-top: 1px solid #145220; }
+
+/* ── Body row types ──────────────────────────────────────────── */
+tr.sg-sec > td {
+  background: #1d5c2e !important;
+  color: #fff !important;
+  font-weight: 700;
+  font-size: 11.5px;
+  letter-spacing: .02em;
+}
+tr.sg-sub > td {
+  background: #388e3c !important;
+  color: #fff !important;
+  font-weight: 600;
+  font-size: 11px;
+}
+tr.sg-task > td { background: #fff; color: #1a3c1a; }
+tr.sg-task:nth-child(even) > td { background: #f5fbf5; }
+tr.sg-task:hover > td { background: #e8f5e9 !important; cursor: default; transition: background .08s; }
+tr.sg-yel > td { background: #fffde7 !important; color: #333 !important; }
+tr.sg-yel:hover > td { background: #fff9c4 !important; }
+
+/* Task name */
+.sg-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+tr.sg-task .sg-name { color: #1a5c20; font-weight: 500; }
+tr.sg-yel .sg-name { color: #333; font-weight: 500; }
+
+/* Center cols */
+.sg-cc { text-align: center !important; font-size: 10.5px !important; }
+
+/* ── Gantt bar cells ─────────────────────────────────────────── */
+.sg-bar     { background: #2e7d32 !important; padding: 4px 0 !important; }
+.sg-bar-y   { background: #f9a825 !important; padding: 4px 0 !important; }
+.sg-bar-sub { background: #43a047 !important; padding: 4px 0 !important; }
+.sg-bar-sec { background: #1b5e20 !important; padding: 4px 0 !important; }
+
+/* Today column */
+.sg-today   { border-left: 2px solid #e53935 !important; }
+.sg-today-h { border-left: 2px solid rgba(229,57,53,.6) !important; }
+
+/* ── Actions ─────────────────────────────────────────────────── */
+.sg-acts { display: flex; gap: 3px; justify-content: center; align-items: center; padding: 0 2px; }
+.sg-ab {
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.5;
+  transition: all .1s;
+}
+.sg-ab:hover { background: #f0f0f0; }
+.sg-ab.del { color: #c62828; border-color: #ffcdd2; }
+.sg-ab.del:hover { background: #ffebee; border-color: #c62828; }
+
+/* ── Legend ──────────────────────────────────────────────────── */
+.sg-legend {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  padding: 6px 16px;
+  border-top: 1px solid #e0ece0;
+  font-size: 11px;
+  color: #666;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  background: #f9fcf9;
+}
+.sg-li { display: flex; align-items: center; gap: 5px; }
+.sg-sw { width: 18px; height: 10px; border-radius: 2px; border: 1px solid rgba(0,0,0,.1); flex-shrink: 0; }
+.sg-hint-scroll {
+  flex: 1;
+  text-align: right;
+  font-size: 10.5px;
+  color: #bbb;
+  font-style: italic;
+}
+
+/* ── Modals ──────────────────────────────────────────────────── */
+.sg-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.5);
+  z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+  animation: sgFi .15s ease;
+}
+@keyframes sgFi { from { opacity: 0 } to { opacity: 1 } }
+
+.sg-btn {
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(160, 190, 255, 0.7);
+  background: transparent;
+  color: #cfe0ff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all .18s ease;
+  white-space: nowrap;
+}
+
+.sg-btn:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: #8fb2ff;
+  color: #ffffff;
+}
+
+.sg-btn.primary {
+  background: linear-gradient(180deg, #2f5fbf 0%, #2a4f9b 100%);
+  color: #ffffff;
+  border-color: #4b78d1;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+}
+
+.sg-btn.primary:hover {
+  background: linear-gradient(180deg, #3b6bcb 0%, #3159aa 100%);
+  border-color: #6d94e6;
+}
+
+.sg-modal {
+  background: linear-gradient(180deg, #0d2238 0%, #0a1c2f 100%);
+  border: 1px solid rgba(135, 168, 214, 0.18);
+  border-radius: 20px;
+  padding: 0;
+  width: min(540px, 95vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 24px 80px rgba(0,0,0,.45);
+  animation: sgSu .2s ease;
+}
+
+.sg-modal h3 {
+  margin: 0;
+  padding: 20px 22px 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #3f8cff;
+}
+
+.sg-modal p {
+  margin: 6px 0 0;
+  padding: 0 22px 18px;
+  font-size: 12px;
+  color: #92a7bf;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.sg-fg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px 18px;
+  padding: 18px 22px 0;
+}
+
+.sg-f {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sg-f.full {
+  grid-column: 1 / -1;
+}
+
+.sg-f label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: #aebed0;
+}
+
+.sg-f input,
+.sg-f select {
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid rgba(140, 165, 195, 0.28);
+  border-radius: 14px;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  background: rgba(255,255,255,0.06);
+  color: #e8f0fb;
+  transition: border-color .18s, box-shadow .18s, background .18s;
+}
+
+.sg-f input::placeholder,
+.sg-f select::placeholder {
+  color: #8ea1b8;
+}
+
+.sg-f input:focus,
+.sg-f select:focus {
+  border-color: #4d7dff;
+  box-shadow: 0 0 0 3px rgba(77,125,255,.18);
+  background: rgba(255,255,255,0.08);
+}
+
+.sg-f input[readonly] {
+  background: rgba(255,255,255,0.04);
+  color: #91a4ba;
+}
+
+.sg-f .hint {
+  font-size: 11px;
+  color: #7f93ab;
+  margin-top: 2px;
+}
+
+.sg-err {
+  display: none;
+  margin: 14px 22px 0;
+  padding: 10px 12px;
+  background: rgba(220, 53, 69, 0.14);
+  color: #ff808e;
+  border: 1px solid rgba(255, 128, 142, 0.28);
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.sg-ma {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 20px;
+  padding: 16px 22px 22px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.02);
+}
+
+
+/* ── Project blocks ───────────────────────────────────────────── */
+.schedule-project-block {
+  border: 1px solid #dce9dc;
+  border-radius: 18px;
+  background: #fff;
+  overflow: hidden;
+  box-shadow: 0 6px 18px rgba(29,92,46,.06);
+}
+.schedule-project-block__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, #f6fbf6 0%, #eef7ee 100%);
+  border-bottom: 1px solid #dce9dc;
+}
+.schedule-project-block__title {
+  font-size: 15px;
+  font-weight: 800;
+  color: #143d1c;
+}
+.schedule-project-block__sub {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #618061;
+}
+.schedule-project-block__tag {
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #e8f5e9;
+  color: #1d5c2e;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.schedule-project-block__body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #fff;
+}
+.schedule-project-tablewrap {
+  min-width: max-content;
+}
+.schedule-project-add-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 6px 0 18px;
+}
+.schedule-project-add {
+  font-size: 12px;
+}
+
+
+/* ── Empty state ─────────────────────────────────────────────── */
+.sg-empty {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 10px;
+  padding: 60px 20px; color: #bbb; font-size: 13px;
+}
+.sg-empty-icon { font-size: 40px; }
+.sg-empty-sub  { font-size: 11px; color: #ddd; }
+
+.schedule-single-shell {
+  gap: 0;
+  overflow: hidden;
+}
+.schedule-project-selector {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px 16px;
+  border-bottom:1px solid #e3ece3;
+  background:linear-gradient(180deg,#f8fbf8,#f3f8f3);
+  flex-wrap:wrap;
+}
+.schedule-project-selector__left,
+.schedule-project-selector__right {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.schedule-project-selector__label {
+  font-size:12px;
+  font-weight:700;
+  color:#1d5c2e;
+}
+.schedule-project-selector__search,
+.schedule-project-selector__select {
+  height:36px;
+  border:1px solid #c9dcc9;
+  border-radius:10px;
+  background:#fff;
+  padding:0 12px;
+  font:600 12px/1.2 Inter, system-ui, sans-serif;
+  color:#1b3e1f;
+}
+.schedule-project-selector__search {
+  min-width:200px;
+}
+.schedule-project-selector__select {
+  min-width:220px;
+}
+.schedule-project-block__body {
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+  background:#fff;
+  overflow:hidden;
+}
+.schedule-project-tablewrap {
+  min-width:max-content;
+}
+  `;
+  document.head.appendChild(s);
+})();
+
+// ─── Date helpers ─────────────────────────────────────────────────
+const _p2 = (n) => String(n).padStart(2, "0");
+const _sod = (d) => {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+};
+const _iso = (d) =>
+  `${d.getFullYear()}-${_p2(d.getMonth() + 1)}-${_p2(d.getDate())}`;
+const _add = (d, n) => {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+};
+
+function _sgPD(v) {
+  if (v == null || v === "") return null;
+  if (v instanceof Date) return isNaN(v) ? null : _sod(v);
+  const s = String(v).trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!isNaN(n) && n > 20000 && n < 90000)
+    return _sod(new Date(Date.UTC(1899, 11, 30) + n * 86400000));
+  const m1 = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m1) return _sod(new Date(+m1[1], +m1[2] - 1, +m1[3]));
+  const MO = {
+    jan: 0,
+    feb: 1,
+    mar: 2,
+    apr: 3,
+    may: 4,
+    jun: 5,
+    jul: 6,
+    aug: 7,
+    sep: 8,
+    oct: 9,
+    nov: 10,
+    dec: 11,
+  };
+  const m2 = s.match(/^(\d{1,2})[-\/\s]([A-Za-z]{3,})[-\/\s](\d{2,4})$/);
+  if (m2) {
+    const mo = MO[m2[2].toLowerCase().slice(0, 3)];
+    let y = +m2[3];
+    if (y < 100) y += y < 50 ? 2000 : 1900;
+    if (mo != null) return _sod(new Date(y, mo, +m2[1]));
   }
-
-  const sample = rows[0] || {};
-  const keys = scheduleKeysFromRow(sample);
-
-  // Timeline range (PDF-like: start a bit earlier, end a bit later)
-  let minStart = null;
-  let maxFinish = null;
-
-  for (const r of rows) {
-    const s = parseAnyDateSched(r[keys.start]);
-    const f = parseAnyDateSched(r[keys.finish]);
-    if (s && (!minStart || s < minStart)) minStart = s;
-    if (f && (!maxFinish || f > maxFinish)) maxFinish = f;
+  const d = new Date(s);
+  return isNaN(d) ? null : _sod(d);
+}
+function _sgFD(v) {
+  const d = _sgPD(v);
+  if (!d) return "";
+  const M = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  return `${d.getDate()}-${M[d.getMonth()]}-${String(d.getFullYear()).slice(-2)}`;
+}
+function _sgDays(rows) {
+  let mn = null,
+    mx = null;
+  rows.forEach((r) => {
+    const s = _sgPD(r.startDate),
+      e = _sgPD(r.endDate);
+    if (s && (!mn || s < mn)) mn = new Date(s);
+    if (e && (!mx || e > mx)) mx = new Date(e);
+  });
+  if (!mn || !mx) return [];
+  const days = [];
+  let c = new Date(mn);
+  while (c <= mx) {
+    days.push(new Date(c));
+    c = _add(c, 1);
   }
-
-  if (!minStart || !maxFinish) {
-    mount.innerHTML = `<div class="gantt-empty">No schedule dates found</div>`;
-    return;
-  }
-
-  const timelineStart = startOfWeekMonday(addDays(minStart, -56)); // -8 weeks
-  const timelineEnd = startOfWeekMonday(addDays(maxFinish, 28)); // +4 weeks
-  const weeks = [];
-  for (let d = new Date(timelineStart); d <= timelineEnd; d = addDays(d, 7)) {
-    weeks.push(new Date(d));
-  }
-
-  const cellW = store.ganttCellW || 22;
-  const ganttWidth = weeks.length * cellW;
-
-  // Build year spans
-  const yearSpans = [];
-  let curYear = weeks[0].getFullYear();
-  let spanStart = 0;
-  for (let i = 0; i < weeks.length; i++) {
-    const y = weeks[i].getFullYear();
-    if (y !== curYear) {
-      yearSpans.push({ year: curYear, from: spanStart, to: i });
-      curYear = y;
-      spanStart = i;
+  return days;
+}
+function _sgMG(days) {
+  const M = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const g = [];
+  let cur = null;
+  days.forEach((d) => {
+    const k = `${M[d.getMonth()]}-${String(d.getFullYear()).slice(-2)}`;
+    if (!cur || cur.k !== k) {
+      cur = { k, label: k, count: 0 };
+      g.push(cur);
     }
-  }
-  yearSpans.push({ year: curYear, from: spanStart, to: weeks.length });
+    cur.count++;
+  });
+  return g;
+}
+function _sgRC(row) {
+  if (row.__isSection) return "sg-sec";
+  if (row.__isTitle) return "sg-sub";
+  const nm = String(row.taskName || "").trim();
+  const hd = !!(_sgPD(row.startDate) && _sgPD(row.endDate));
+  if (!hd)
+    return nm === nm.toUpperCase() && nm.replace(/\s/g, "").length > 1
+      ? "sg-sec"
+      : "sg-sub";
+  if (row.__highlight === "yellow") return "sg-task sg-yel";
+  return "sg-task";
+}
 
-  const weekLabels = weeks.map((_, i) => `W${i - 8}`);
+// ─── Overlay helper ───────────────────────────────────────────────
+function _sgOv() {
+  const bg = document.createElement("div");
+  bg.className = "sg-overlay";
+  bg.onclick = (e) => {
+    if (e.target === bg) bg.remove();
+  };
+  return bg;
+}
 
-  // Sticky left column widths (match PDF vibe)
-  const leftCols = isFullGantt
-    ? [
-        { key: keys.id, label: "ID", w: 64, cls: "mono" },
-        { key: keys.taskName, label: "TASK NAME", w: 460, cls: "sch-task" },
-        { key: keys.start, label: "START", w: 130, cls: "mono" },
-        { key: keys.finish, label: "FINISH", w: 130, cls: "mono" },
-      ]
-    : [
-        { key: keys.id, label: "ID", w: 60, cls: "mono" },
-        { key: keys.taskMode, label: "TASK MODE", w: 120, cls: "" },
-        { key: keys.pct, label: "% COMPLETE", w: 110, cls: "mono sch-pct" },
-        { key: keys.taskName, label: "TASK NAME", w: 360, cls: "sch-task" },
-        { key: keys.duration, label: "DURATION", w: 120, cls: "mono" },
-        { key: keys.start, label: "START", w: 120, cls: "mono" },
-        { key: keys.finish, label: "FINISH", w: 120, cls: "mono" },
-        { key: keys.pred, label: "PREDECESSORS", w: 150, cls: "mono" },
-        { key: "__actions", label: "ACTIONS", w: 140, cls: "mono" },
-      ];
+// ─── Add Project modal ────────────────────────────────────────────
 
-  // Compute sticky left offsets
-  let acc = 0;
-  for (const c of leftCols) {
-    c.left = acc;
-    acc += c.w;
-  }
-  const leftTotal = acc;
-
-  const headLeft = leftCols
-    .map(
-      (c) =>
-        `<div class="sch-h sch-sticky" style="width:${c.w}px; left:${c.left}px">${esc(
-          c.label,
-        )}</div>`,
-    )
-    .join("");
-
-  const headYears = yearSpans
-    .map((ys) => {
-      const w = (ys.to - ys.from) * cellW;
-      return `<div class="sch-year" style="width:${w}px">${ys.year}</div>`;
-    })
-    .join("");
-
-  const headWeeks = weekLabels
-    .map((lab) => `<div class="sch-week" style="width:${cellW}px">${lab}</div>`)
-    .join("");
-
-  const today = startOfWeekMonday(new Date());
-  const todayIdx = Math.max(
-    0,
-    Math.min(
-      weeks.length - 1,
-      Math.round(daysBetween(timelineStart, today) / 7),
-    ),
-  );
-
-  const bodyRows = rows
-    .map((r) => {
-      const idVal = safeIdFromRow(r);
-      const mode = String(r[keys.taskMode] ?? "").trim();
-      const isMilestone = /milestone/i.test(mode);
-      const isSummary =
-        /summary/i.test(mode) || /project\s*summary/i.test(mode);
-
-      const s = parseAnyDateSched(r[keys.start]);
-      const f = parseAnyDateSched(r[keys.finish]);
-
-      const startIdx = s
-        ? Math.round(daysBetween(timelineStart, startOfWeekMonday(s)) / 7)
-        : null;
-      const endIdx = f
-        ? Math.round(daysBetween(timelineStart, startOfWeekMonday(f)) / 7)
-        : startIdx;
-
-      const leftPx = startIdx == null ? 0 : startIdx * cellW;
-      const spanWeeks =
-        startIdx == null || endIdx == null
-          ? 0
-          : Math.max(1, endIdx - startIdx + 1);
-      const widthPx = spanWeeks * cellW;
-
-      const pct = Number(String(r[keys.pct] ?? "").replace(/[^\d.]/g, ""));
-      const pct01 = isNaN(pct) ? 0 : pct > 1 ? pct / 100 : pct;
-
-      const nameText = esc(String(r[keys.taskName] ?? "").trim());
-      const dateTag = s
-        ? `${String(String(r[keys.start] ?? "")).slice(0, 5)}`
-        : "";
-
-      const barHTML = isMilestone
-        ? `<div class="sch-item milestone" style="left:${leftPx}px">
-             <span class="sch-dia"></span>
-             <span class="sch-milabel">${nameText}</span>
-           </div>`
-        : `<div class="sch-item ${isSummary ? "summary" : "task"}" style="left:${leftPx}px; width:${widthPx}px">
-            <span class="sch-bar">
-              <span class="sch-progress" style="width:${Math.round(pct01 * 100)}%"></span>
-            </span>
-            <span class="sch-label">${nameText}</span>
-          </div>`;
-
-      const ganttCell = `
-        <div class="sch-gantt-cell" style="width:${ganttWidth}px">
-          <div class="sch-gantt-grid" style="--cw:${cellW}px">
-            <div class="sch-today" style="left:${todayIdx * cellW}px"></div>
-            ${barHTML}
-          </div>
-        </div>`;
-
-      const leftCells = leftCols
-        .map((c) => {
-          if (c.key === "__actions") {
-            return `<div class="sch-c sch-sticky" style="width:${c.w}px; left:${c.left}px">
-              <button class="btn ghost btn-xs" data-act="edit" data-id="${esc(idVal)}">Edit</button>
-              <button class="btn ghost btn-xs" data-act="del" data-id="${esc(idVal)}">Delete</button>
-            </div>`;
-          }
-
-          if (
-            String(c.key).toLowerCase() === String(keys.taskName).toLowerCase()
-          ) {
-            return `<div class="sch-c sch-sticky ${c.cls}" style="width:${c.w}px; left:${c.left}px">${scheduleNameCellHTML(
-              r,
-            )}</div>`;
-          }
-
-          if (
-            String(c.key).toLowerCase() === String(keys.start).toLowerCase()
-          ) {
-            return `<div class="sch-c sch-sticky ${c.cls}" style="width:${c.w}px; left:${c.left}px">${esc(
-              formatDatePDF(r[keys.start]),
-            )}</div>`;
-          }
-
-          if (
-            String(c.key).toLowerCase() === String(keys.finish).toLowerCase()
-          ) {
-            return `<div class="sch-c sch-sticky ${c.cls}" style="width:${c.w}px; left:${c.left}px">${esc(
-              formatDatePDF(r[keys.finish]),
-            )}</div>`;
-          }
-
-          if (
-            String(c.key).toLowerCase() === String(keys.duration).toLowerCase()
-          ) {
-            return `<div class="sch-c sch-sticky ${c.cls}" style="width:${c.w}px; left:${c.left}px">${esc(
-              formatScheduleDuration(
-                r[keys.duration],
-                r[keys.start],
-                r[keys.finish],
-              ),
-            )}</div>`;
-          }
-
-          if (String(c.key).toLowerCase() === String(keys.pct).toLowerCase()) {
-            return `<div class="sch-c sch-sticky ${c.cls}" style="width:${c.w}px; left:${c.left}px">${esc(
-              formatSchedulePercent(r[keys.pct]),
-            )}</div>`;
-          }
-
-          const raw = r[c.key] ?? "";
-          return `<div class="sch-c sch-sticky ${c.cls}" style="width:${c.w}px; left:${c.left}px">${esc(
-            raw,
-          )}</div>`;
-        })
-        .join("");
-
-      const rowType = isMilestone
-        ? "milestone"
-        : isSummary
-          ? "summary"
-          : "task";
-      return `<div class="sch-row sch-row--${rowType}" style="--leftw:${leftTotal}px">${leftCells}${ganttCell}</div>`;
-    })
-    .join("");
-
-  // Apply/remove gantt-fullscreen class on the schedule layout
-  const schLayout = el("scheduleLayout");
-  if (schLayout) {
-    if (isFullGantt) schLayout.classList.add("gantt-fullscreen");
-    else schLayout.classList.remove("gantt-fullscreen");
-  }
-
-  const ganttProTopbar = isFullGantt
-    ? `
-    <div class="gantt-pro-topbar">
-      <button class="gantt-pro-backbtn" id="ganttProBackBtn" type="button">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 1L3 7L9 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Back to Schedule
-      </button>
-      <div class="gantt-pro-info">
-        <div class="gantt-pro-title">Schedule Gantt</div>
-        <div class="gantt-pro-subtitle">Upper Myagdi-1 Hydro Power Project &middot; Troyer ITA &amp; Troyer Hydro</div>
-      </div>
-      <div class="gantt-pro-right">
-        <div class="gantt-pro-legend">
-          <span class="gpl-item"><span class="gpl-swatch task"></span>Task</span>
-          <span class="gpl-item"><span class="gpl-swatch summary"></span>Summary</span>
-          <span class="gpl-item"><span class="gpl-swatch milestone"></span>Milestone</span>
-          <span class="gpl-item"><span class="gpl-swatch today"></span>Today</span>
-        </div>
-        <div class="gantt-zoom-ctrl">
-          <label class="gantt-zoom-lbl" for="ganttProZoom">Zoom</label>
-          <select class="gantt-zoom-sel" id="ganttProZoom">
-            <option value="14">Compact</option>
-            <option value="18">Normal</option>
-            <option value="24">Wide</option>
-            <option value="32">Extra Wide</option>
-          </select>
-        </div>
+function _sgAddProject() {
+  const bg = _sgOv();
+  bg.innerHTML = `<div class="sg-modal" style="width:min(420px,95vw)">
+    <h3>➕ New Project</h3>
+    <p>Creates a new project sheet with the same schedule structure, ready for tasks.</p>
+    <div class="sg-fg">
+      <div class="sg-f full">
+        <label>Project Name *</label>
+        <input id="_pn" type="text" placeholder="e.g. Ramhari HPP, Upper Seti…" autocomplete="off"/>
+        <span class="hint">Sheet name: &lt;name&gt;_timeline (auto-generated)</span>
       </div>
     </div>
-  `
-    : "";
-
-  mount.innerHTML =
-    ganttProTopbar +
-    `
-    <div class="sch-sheet ${isFullGantt ? "sch-sheet--gantt" : ""}" style="--cw:${cellW}px">
-      <div class="sch-head">
-        <div class="sch-head-left" style="width:${leftTotal}px">${headLeft}</div>
-        <div class="sch-head-right" style="width:${ganttWidth}px">
-          <div class="sch-year-row">${headYears}</div>
-          <div class="sch-week-row">${headWeeks}</div>
-        </div>
-      </div>
-      <div class="sch-body">${bodyRows}</div>
-    </div>`;
-
-  // Wire up the inline gantt controls
-  if (isFullGantt) {
-    const backBtn = el("ganttProBackBtn");
-    if (backBtn)
-      backBtn.onclick = () => navigate("schedule", { pushHash: true });
-    const zoomSel = el("ganttProZoom");
-    if (zoomSel) {
-      zoomSel.value = String(cellW);
-      zoomSel.onchange = () => {
-        store.ganttCellW = Number(zoomSel.value) || 18;
-        renderScheduleSheet();
-      };
+    <div class="sg-err" id="_pe"></div>
+    <div class="sg-ma">
+      <button class="sg-btn" id="_pc">Cancel</button>
+      <button class="sg-btn primary" id="_ps">Create Project</button>
+    </div>
+  </div>`;
+  document.body.appendChild(bg);
+  const ni = bg.querySelector("#_pn");
+  bg.querySelector("#_pc").onclick = () => bg.remove();
+  ni.focus();
+  bg.querySelector("#_ps").onclick = async () => {
+    const name = ni.value.trim();
+    const err = bg.querySelector("#_pe");
+    if (!name) {
+      err.textContent = "Project name is required.";
+      err.style.display = "block";
+      ni.focus();
+      return;
     }
+
+    const sheet =
+      name
+        .replace(/[^\w\s-]/g, "")
+        .trim()
+        .replace(/\s+/g, "_") + "_timeline";
+    const dup = (store.scheduleProjects || []).some(
+      (p) => p.sheet.toLowerCase() === sheet.toLowerCase(),
+    );
+    if (dup) {
+      err.textContent = `"${name}" already exists.`;
+      err.style.display = "block";
+      return;
+    }
+
+    const btn = bg.querySelector("#_ps");
+    btn.disabled = true;
+    btn.textContent = "Creating…";
+
+    try {
+      await apiCreateRow(sheet, "schedule", {
+        "Task Name / Milestone": "",
+        "Duration (days)": "",
+        "Start Date": "",
+        "Finish Date": "",
+        "Notes / Section": "",
+      });
+
+      store.scheduleProjectCache = {};
+      await loadScheduleProjects();
+      store.activeScheduleSheet = sheet;
+      store.scheduleProjectSearch = name;
+      await loadCurrentViewData({ resetPage: true });
+      toast(
+        "success",
+        `Project "${name}" created`,
+        "New schedule sheet is ready ✓",
+      );
+      bg.remove();
+    } catch (e) {
+      err.textContent = e.message || "Failed to create project.";
+      err.style.display = "block";
+      btn.disabled = false;
+      btn.textContent = "Create Project";
+    }
+  };
+}
+
+// ─── Task CRUD modal ──────────────────────────────────────────────
+function _sgTask(mode, row, sheet) {
+  const bg = _sgOv();
+  const v = row || {};
+  const fi = (x) => {
+    const d = _sgPD(x);
+    return d ? _iso(d) : "";
+  };
+  bg.innerHTML = `<div class="sg-modal">
+    <h3>${mode === "add" ? "➕ Add Task" : "✏️ Edit Task"}</h3>
+    <p>Saved directly to the Excel workbook.</p>
+    <div class="sg-fg">
+      <div class="sg-f full">
+        <label>Task Name / Milestone *</label>
+        <input id="_tn" type="text" value="${esc(v.taskName || "")}" placeholder="Task name or milestone…"/>
+      </div>
+      <div class="sg-f">
+        <label>Start Date</label>
+        <input id="_ts" type="date" value="${fi(v.startDate)}"/>
+      </div>
+      <div class="sg-f">
+        <label>Finish Date</label>
+        <input id="_te" type="date" value="${fi(v.endDate)}"/>
+      </div>
+      <div class="sg-f">
+        <label>Duration (days)</label>
+       <input id="_td" type="number" value="${esc(String(v.duration || ""))}" placeholder="Enter days or use dates"/>
+       <span class="hint">Auto-calculated from dates, or enter manually</span>
+      </div>
+      <div class="sg-f">
+        <label>Notes / Section</label>
+        <input id="_tnotes" type="text" value="${esc(v.remarks || "")}" placeholder="Optional…"/>
+      </div>
+    </div>
+    <div class="sg-err" id="_te2"></div>
+    <div class="sg-ma">
+      <button class="sg-btn" id="_tc">Cancel</button>
+      <button class="sg-btn primary" id="_tv">${mode === "add" ? "Create Task" : "Save Changes"}</button>
+    </div>
+  </div>`;
+  document.body.appendChild(bg);
+  const ne = bg.querySelector("#_tn"),
+    se = bg.querySelector("#_ts"),
+    ee = bg.querySelector("#_te"),
+    de = bg.querySelector("#_td"),
+    err = bg.querySelector("#_te2");
+  const rc = (source = "") => {
+    const s = _sgPD(se.value);
+    const e = _sgPD(ee.value);
+    const d = Number(String(de.value || "").trim());
+
+    if (source !== "duration" && s && e && e >= s) {
+      de.value = Math.round((e - s) / 86400000) + 1;
+      return;
+    }
+
+    if (source === "duration" && s && Number.isFinite(d) && d > 0) {
+      const finish = new Date(s);
+      finish.setDate(finish.getDate() + Math.max(0, Math.round(d) - 1));
+      ee.value = _iso(finish);
+    }
+  };
+
+  se.onchange = () => rc("start");
+  ee.onchange = () => rc("end");
+  de.oninput = () => rc("duration");
+  rc();
+  bg.querySelector("#_tc").onclick = () => bg.remove();
+  ne.focus();
+  bg.querySelector("#_tv").onclick = async () => {
+    const name = ne.value.trim();
+    if (!name) {
+      err.textContent = "Task name is required.";
+      err.style.display = "block";
+      ne.focus();
+      return;
+    }
+    err.style.display = "none";
+    const payload = {
+      "Task Name": name,
+      "Start Date": se.value || "",
+      "End Date": ee.value || "",
+      Duration: de.value || "",
+      Remarks: bg.querySelector("#_tnotes").value || "",
+    };
+    const btn = bg.querySelector("#_tv");
+    btn.disabled = true;
+    btn.textContent = "Saving…";
+    try {
+      if (mode === "add") {
+        await apiCreateRow(sheet, "schedule", payload);
+        toast("success", "Task created", "Saved to Excel");
+      } else {
+        await apiUpdateRow(sheet, v.id, payload);
+        toast("success", "Task updated", "Saved to Excel");
+      }
+
+      await refreshScheduleState(sheet, { resetPage: false });
+
+      bg.remove();
+      renderScheduleSheet();
+    } catch (e) {
+      err.textContent = e.message || "Save failed.";
+      err.style.display = "block";
+      btn.disabled = false;
+      btn.textContent = mode === "add" ? "Create Task" : "Save Changes";
+    }
+  };
+}
+
+async function deleteScheduleTaskRow(sheet, row) {
+  const ok = window.confirm(
+    `Are you sure you want to delete "${row?.["Task Name"] || row?.taskName || "this row"}"?`,
+  );
+  if (!ok) return;
+
+  try {
+    await apiDeleteRow(sheet, row.id);
+
+    delete store.scheduleProjectCache?.[sheet];
+    delete store.scheduleGridCache?.[sheet];
+
+    const refreshed = await loadScheduleProjectRows(sheet, { force: true });
+
+    store.scheduleProjectRows = [
+      ...(store.scheduleProjectRows || []).filter((p) => p.sheet !== sheet),
+      refreshed,
+    ];
+
+    if (store.activeScheduleSheet === sheet) {
+      store.data = Array.isArray(refreshed.rows) ? refreshed.rows.slice() : [];
+      store.allSchedule = store.data.slice();
+      views.schedule.columns = inferColumnsFromData(store.data, "schedule");
+      views.gantt.columns = inferColumnsFromData(store.data, "gantt");
+    }
+
+    toast("success", "Task deleted", "Removed from Excel");
+    renderScheduleSheet();
+  } catch (err) {
+    toast("error", "Delete failed", err.message || "");
   }
 }
 
+async function apiRenameScheduleProject(sheet, name) {
+  const res = await apiFetch(`${API}/excel/schedule-project`, {
+    method: "PUT",
+    body: JSON.stringify({ sheet, name }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) throw new Error(json.error || "Failed to rename project");
+  return json;
+}
+
+async function apiDeleteScheduleProject(sheet) {
+  const res = await apiFetch(
+    `${API}/excel/schedule-project?sheet=${encodeURIComponent(sheet)}`,
+    {
+      method: "DELETE",
+    },
+  );
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) throw new Error(json.error || "Failed to delete project");
+  return json;
+}
+
+// ─── Core table renderer ──────────────────────────────────────────
+function _sgDraw(wrap, rows, dayW, activeSheet) {
+  dayW = Math.max(14, Math.min(52, dayW || 22));
+  wrap.innerHTML = "";
+
+  // Fixed column definitions
+  const FC = [
+    {
+      label: "Task Name /\nMilestone",
+      w: 230,
+      cls: "",
+      get: (r) => r.taskName || "",
+    },
+    {
+      label: "Duration\n(days)",
+      w: 64,
+      cls: "sg-cc",
+      get: (r) => r.duration || "",
+    },
+    {
+      label: "Start\nDate",
+      w: 82,
+      cls: "sg-cc",
+      get: (r) => _sgFD(r.startDate),
+    },
+    {
+      label: "Finish\nDate",
+      w: 82,
+      cls: "sg-cc",
+      get: (r) => _sgFD(r.endDate),
+    },
+    { label: "Notes /\nSection", w: 90, cls: "", get: (r) => r.remarks || "" },
+  ];
+  const AW = 82; // actions col width
+
+  // Compute cumulative left for sticky positioning
+  const lefts = [];
+  let cum = 0;
+  FC.forEach((f) => {
+    lefts.push(cum);
+    cum += f.w;
+  });
+  const actsLeft = cum; // left of actions col
+  const frozenW = cum + AW; // total frozen width (helps with gantt scroll offset)
+
+  const days = _sgDays(rows);
+  const today = _iso(_sod(new Date()));
+  const MNAMES = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+
+  // ── Build table DOM ───────────────────────────────────────────
+  const tbl = document.createElement("table");
+  tbl.className = "sg-tbl";
+  const TH = document.createElement("thead");
+  const TB = document.createElement("tbody");
+  tbl.append(TH, TB);
+
+  // Helper: make a frozen-col th/td
+  function mkFth(i, extra) {
+    const th = document.createElement("th");
+    th.className = `fc${i === 0 ? " fc-first" : ""}${i === FC.length - 1 ? " fc-last" : ""}`;
+    th.classList.add("fc");
+    th.style.cssText = `width:${FC[i].w}px;min-width:${FC[i].w}px;left:${lefts[i]}px;${extra || ""}`;
+    return th;
+  }
+  function mkFtd(i) {
+    const td = document.createElement("td");
+    td.className = `fc${i === 0 ? " fc-first" : ""}`;
+    td.classList.add("fc");
+    td.style.cssText = `width:${FC[i].w}px;min-width:${FC[i].w}px;left:${lefts[i]}px;`;
+    return td;
+  }
+  function mkActTh() {
+    const th = document.createElement("th");
+    th.className = "fc fc-shadow";
+    th.style.cssText = `width:${AW}px;min-width:${AW}px;left:${actsLeft}px;`;
+    return th;
+  }
+  function mkActTd() {
+    const td = document.createElement("td");
+    td.className = "fc fc-shadow";
+    td.style.cssText = `width:${AW}px;min-width:${AW}px;left:${actsLeft}px;background:inherit;`;
+    return td;
+  }
+  function mkDayTh(day, cls) {
+    const th = document.createElement("th");
+    th.style.cssText = `width:${dayW}px;min-width:${dayW}px;max-width:${dayW}px;`;
+    if (_iso(day) === today) th.classList.add(cls || "sg-today-h");
+    return th;
+  }
+  function mkDayTd(day) {
+    const td = document.createElement("td");
+    td.style.cssText = `width:${dayW}px;min-width:${dayW}px;max-width:${dayW}px;padding:3px 0;`;
+    if (_iso(day) === today) td.classList.add("sg-today");
+    return td;
+  }
+
+  // ── HEADER ROW 1: labels + month groups ──────────────────────
+  const h1 = document.createElement("tr");
+  h1.className = "sg-h1";
+  FC.forEach((_, i) => {
+    const th = mkFth(i);
+    th.style.zIndex = "8";
+    th.innerHTML = FC[i].label.replace(/\n/, "<br>");
+    h1.appendChild(th);
+  });
+  const ah1 = mkActTh();
+  ah1.style.zIndex = "8";
+  ah1.textContent = "Actions";
+  h1.appendChild(ah1);
+  _sgMG(days).forEach(({ label, count }) => {
+    const th = document.createElement("th");
+    th.colSpan = count;
+    th.textContent = label;
+    h1.appendChild(th);
+  });
+  TH.appendChild(h1);
+
+  // ── HEADER ROW 2: month name per day column ───────────────────
+  const h2 = document.createElement("tr");
+  h2.className = "sg-h2";
+  FC.forEach((_, i) => {
+    const th = mkFth(i);
+    h2.appendChild(th);
+  });
+  const ah2 = mkActTh();
+  h2.appendChild(ah2);
+  days.forEach((day) => {
+    const th = mkDayTh(day, "sg-today-h");
+    // Show month abbreviation only on 1st of month
+    if (day.getDate() === 1) th.textContent = MNAMES[day.getMonth()];
+    h2.appendChild(th);
+  });
+  TH.appendChild(h2);
+
+  // ── HEADER ROW 3: day numbers ─────────────────────────────────
+  const h3 = document.createElement("tr");
+  h3.className = "sg-h3";
+  FC.forEach((_, i) => {
+    const th = mkFth(i);
+    h3.appendChild(th);
+  });
+  const ah3 = mkActTh();
+  h3.appendChild(ah3);
+  let todayIdx = -1;
+  days.forEach((day, di) => {
+    const th = mkDayTh(day, "sg-today-h");
+    if (dayW >= 18) th.textContent = day.getDate();
+    else if (day.getDate() % 5 === 0) th.textContent = day.getDate();
+    if (_iso(day) === today) todayIdx = di;
+    h3.appendChild(th);
+  });
+  TH.appendChild(h3);
+
+  // ── BODY ROWS ─────────────────────────────────────────────────
+  rows.forEach((row) => {
+    const cls = _sgRC(row);
+    const isHdr = cls === "sg-sec" || cls === "sg-sub";
+    const isYel = cls.includes("sg-yel");
+    const rS = _sgPD(row.startDate);
+    const rE = _sgPD(row.endDate);
+    const tr = document.createElement("tr");
+    tr.className = cls;
+
+    if (isHdr) {
+      // Section/sub: name spans all fixed cols + actions, no individual bars
+      const td = document.createElement("td");
+      td.className = "fc fc-first fc-shadow";
+      td.colSpan = FC.length + 1; // covers all FC cols + actions
+      td.style.cssText = `left:0;width:${frozenW}px;min-width:${frozenW}px;`;
+      td.textContent = row.taskName || "";
+      tr.appendChild(td);
+      days.forEach((day) => {
+        const td = mkDayTd(day);
+        if (rS && rE && day >= rS && day <= rE)
+          td.classList.add(cls === "sg-sec" ? "sg-bar-sec" : "sg-bar-sub");
+        tr.appendChild(td);
+      });
+    } else {
+      // Normal task: all cols individually
+      FC.forEach((_, i) => {
+        const td = mkFtd(i);
+        if (FC[i].cls) td.classList.add(...FC[i].cls.split(" "));
+        const val = FC[i].get(row);
+        if (i === 0) {
+          const sp = document.createElement("span");
+          sp.className = "sg-name";
+          sp.title = val;
+          sp.textContent = val;
+          td.appendChild(sp);
+        } else {
+          td.textContent = val;
+        }
+        tr.appendChild(td);
+      });
+      // Actions
+      const atd = mkActTd();
+      const aw = document.createElement("div");
+      aw.className = "sg-acts";
+      const eb = document.createElement("button");
+      eb.className = "sg-ab";
+      eb.textContent = "Edit";
+      eb.onclick = (e) => {
+        e.stopPropagation();
+        _sgTask("edit", row, activeSheet);
+      };
+      const db = document.createElement("button");
+      db.className = "sg-ab del";
+      db.textContent = "Del";
+      db.onclick = (e) => {
+        e.stopPropagation();
+        deleteScheduleTaskRow(activeSheet, row);
+      };
+      aw.append(eb, db);
+      atd.appendChild(aw);
+      tr.appendChild(atd);
+      // Date/gantt cells
+      days.forEach((day) => {
+        const td = mkDayTd(day);
+        if (rS && rE && day >= rS && day <= rE)
+          td.classList.add(isYel ? "sg-bar-y" : "sg-bar");
+        tr.appendChild(td);
+      });
+    }
+    TB.appendChild(tr);
+  });
+
+  wrap.appendChild(tbl);
+
+  // Auto-scroll so today is visible in the gantt area
+  if (todayIdx >= 0) {
+    requestAnimationFrame(() => {
+      const scroller = wrap.closest(".sg-scroll");
+      if (!scroller) return;
+      const ganttStart = frozenW + todayIdx * dayW;
+      const viewW = scroller.clientWidth;
+      // Position today at ~35% from left edge of visible gantt
+      scroller.scrollLeft = Math.max(0, ganttStart - frozenW - viewW * 0.35);
+    });
+  }
+}
+
+// ─── Main entry point ─────────────────────────────────────────────
+
+function renderScheduleSheet() {
+  const mount = el("scheduleSheet");
+  const header = el("scheduleHeader");
+  if (!mount) return;
+  if (header) header.style.display = "none";
+
+  const projects = Array.isArray(store.scheduleProjects)
+    ? store.scheduleProjects
+    : [];
+  const activeProject = getActiveScheduleProject();
+  const projectData =
+    Array.isArray(store.scheduleProjectRows) && store.scheduleProjectRows[0]
+      ? store.scheduleProjectRows[0]
+      : activeProject
+        ? { sheet: activeProject.sheet, title: activeProject.title, rows: [] }
+        : null;
+
+  mount.innerHTML = "";
+  mount.style.cssText =
+    ""; /* Let body.is-schedule #scheduleSheet CSS class control layout */
+
+  const shell = document.createElement("section");
+  shell.className = "schedule-project-block schedule-single-shell";
+
+  const topbar = document.createElement("div");
+  topbar.className = "schedule-project-selector";
+
+  const left = document.createElement("div");
+  left.className = "schedule-project-selector__left";
+
+  const label = document.createElement("div");
+  label.className = "schedule-project-selector__label";
+  label.textContent = "Project";
+
+  const search = document.createElement("input");
+  search.className = "schedule-project-selector__search";
+  search.type = "text";
+  search.placeholder = "Filter projects...";
+  search.value = store.scheduleProjectSearch || "";
+
+  const select = document.createElement("select");
+  select.className = "schedule-project-selector__select";
+
+  const filteredProjects = projects.filter((project) => {
+    const q = String(store.scheduleProjectSearch || "")
+      .trim()
+      .toLowerCase();
+    if (!q) return true;
+    return [project.title, project.sheet].some((v) =>
+      String(v || "")
+        .toLowerCase()
+        .includes(q),
+    );
+  });
+
+  const optionList = filteredProjects.length ? filteredProjects : projects;
+  select.innerHTML = optionList
+    .map((project) => {
+      const selected =
+        project.sheet === store.activeScheduleSheet ? "selected" : "";
+      return `<option value="${escapeAttr(project.sheet)}" ${selected}>${esc(project.title || project.sheet)}</option>`;
+    })
+    .join("");
+
+  if (!optionList.length) {
+    select.innerHTML = `<option value="">No projects yet</option>`;
+    select.disabled = true;
+  }
+
+  search.oninput = () => {
+    store.scheduleProjectSearch = search.value || "";
+    renderScheduleSheet();
+  };
+
+  select.onchange = async () => {
+    store.activeScheduleSheet = select.value;
+    saveActiveScheduleSheet(store.activeScheduleSheet);
+    delete store.scheduleProjectCache?.[store.activeScheduleSheet];
+    await loadCurrentViewData({ resetPage: true });
+  };
+
+  left.append(label, search, select);
+
+  const right = document.createElement("div");
+  right.className = "schedule-project-selector__right";
+
+  let dayW = window.__sgDayW || 22;
+
+  const zoomWrap = document.createElement("div");
+  zoomWrap.className = "sg-zoom-wrap";
+  const zl = document.createElement("span");
+  zl.textContent = "Zoom:";
+  const zs = document.createElement("input");
+  zs.type = "range";
+  zs.min = 14;
+  zs.max = 52;
+  zs.value = dayW;
+  const zv = document.createElement("span");
+  zv.className = "sg-zoom-label";
+  zv.textContent = `${dayW}px`;
+  const syncZoomTrack = () => {
+    const pct = (((dayW - 14) / (52 - 14)) * 100).toFixed(1);
+    zs.style.setProperty("--pct", pct + "%");
+  };
+  syncZoomTrack();
+  zoomWrap.append(zl, zs, zv);
+
+  const addProjectBtn = document.createElement("button");
+  addProjectBtn.className = "sg-btn";
+  addProjectBtn.textContent = "+ New Project";
+  addProjectBtn.onclick = () => _sgAddProject();
+
+  const addTaskBtn = document.createElement("button");
+  addTaskBtn.className = "sg-btn primary";
+  addTaskBtn.textContent = "+ Add Task";
+  addTaskBtn.disabled = !projectData?.sheet;
+  addTaskBtn.onclick = () => {
+    if (projectData?.sheet) _sgTask("add", null, projectData.sheet);
+  };
+
+  right.append(zoomWrap, addProjectBtn, addTaskBtn);
+  topbar.append(left, right);
+
+  shell.appendChild(topbar);
+
+  if (!projectData?.sheet) {
+    const empty = document.createElement("div");
+    empty.className = "sg-empty";
+    empty.innerHTML = `
+      <div class="sg-empty-icon">📋</div>
+      <div>No schedule projects found</div>
+      <div class="sg-empty-sub">Create your first project to start the schedule.</div>
+    `;
+    shell.appendChild(empty);
+    mount.appendChild(shell);
+    const rc = el("rowCount");
+    if (rc) rc.textContent = "0 rows";
+    return;
+  }
+
+  const head = document.createElement("div");
+  head.className = "schedule-project-block__head";
+  head.innerHTML = `
+    <div>
+      <div class="schedule-project-block__title">${esc(projectData.title || projectData.sheet)}</div>
+      <div class="schedule-project-block__sub">Sheet: ${esc(projectData.sheet)}</div>
+    </div>
+    <div class="schedule-project-block__tag">${(projectData.rows || []).length} tasks</div>
+  `;
+
+  const body = document.createElement("div");
+  body.className = "schedule-project-block__body";
+
+  const scrollDiv = document.createElement("div");
+  scrollDiv.className = "sg-scroll";
+
+  const tableWrap = document.createElement("div");
+  tableWrap.className = "schedule-project-tablewrap";
+  scrollDiv.appendChild(tableWrap);
+
+  if (!projectData.rows || !projectData.rows.length) {
+    tableWrap.innerHTML = `
+      <div class="sg-empty">
+        <div class="sg-empty-icon">📋</div>
+        <div>No tasks found for <strong>${esc(projectData.title || projectData.sheet)}</strong></div>
+        <div class="sg-empty-sub">Use "+ Add Task" to populate this project. The Gantt updates from duration, start, and finish dates.</div>
+      </div>
+    `;
+  } else {
+    _sgDraw(tableWrap, projectData.rows, dayW, projectData.sheet);
+  }
+
+  zs.oninput = () => {
+    dayW = Number(zs.value);
+    window.__sgDayW = dayW;
+    zv.textContent = `${dayW}px`;
+    syncZoomTrack();
+    if (projectData.rows && projectData.rows.length) {
+      _sgDraw(tableWrap, projectData.rows, dayW, projectData.sheet);
+    }
+  };
+
+  const legend = document.createElement("div");
+  legend.className = "sg-legend";
+  legend.innerHTML = `
+    <strong style="color:#1d5c2e">Legend:</strong>
+    <div class="sg-li"><div class="sg-sw" style="background:#2e7d32"></div>Task</div>
+    <div class="sg-li"><div class="sg-sw" style="background:#f9a825;border-color:#e09020"></div>Highlighted</div>
+    <div class="sg-li"><div class="sg-sw" style="background:#1b5e20"></div>Section header</div>
+    <div class="sg-li"><div class="sg-sw" style="background:#43a047"></div>Sub-section</div>
+    <div class="sg-li"><div style="width:3px;height:14px;background:#e53935;border-radius:1px;flex-shrink:0"></div>Today</div>
+    <div class="sg-hint-scroll">← Scroll horizontally only when the timeline is wider than the frame →</div>
+  `;
+
+  body.append(scrollDiv, legend);
+  shell.append(head, body);
+  mount.appendChild(shell);
+
+  const rc = el("rowCount");
+  if (rc) {
+    rc.textContent = `${(projectData.rows || []).length} rows`;
+  }
+}
+
+// OVERVIEW DASHBOARD
+// ================================================================
+
 function render() {
+  setActiveNav(store.view);
+  applyViewLayout();
+
   if (store.view === "overview") {
     renderOverviewDashboard();
     return;
   }
 
-  if (store.view === "gantt") {
-    renderGanttPage();
-    return;
-  }
-
   renderTableView();
 }
-
-// ================================================================
-// OVERVIEW DASHBOARD
-// ================================================================
 
 function renderOverviewDashboard() {
   el("overviewView").style.display = "";
@@ -1945,11 +3558,6 @@ function renderOverviewDashboard() {
   if (chartInstances.status) {
     chartInstances.status.destroy();
     chartInstances.status = null;
-  }
-  if (store.view === "schedule" && /^task\s*mode$/i.test(key)) {
-    const v = String(row[key] ?? "").trim() || "Task";
-    td.innerHTML = `<span class="pill">${v}</span>`;
-    return;
   }
 
   renderOverviewStats();
@@ -2051,50 +3659,49 @@ function renderResponsibilityChart() {
   const canvas = el("engagementsChart");
   if (!canvas) return;
 
-  if (chartInstances.engagements) chartInstances.engagements.destroy();
+  if (chartInstances.engagements) {
+    chartInstances.engagements.destroy();
+    chartInstances.engagements = null;
+  }
 
-  const rows = store.allSchedule || [];
-  if (!rows.length) {
+  const projects = Array.isArray(store.scheduleProjectRows)
+    ? store.scheduleProjectRows
+    : [];
+
+  if (!projects.length) {
     canvas.parentElement.innerHTML =
-      '<div class="chart-empty">No schedule data available</div>';
+      '<div class="chart-empty">No schedule project data available</div>';
     return;
   }
 
-  const sample = rows[0] || {};
-  const respKey =
-    Object.keys(sample).find((k) => /responsibility|owner|assigned/i.test(k)) ||
-    null;
+  const items = projects.map((project) => {
+    const rows = Array.isArray(project.rows) ? project.rows : [];
+    const taskCount = rows.filter((row) => {
+      if (!row) return false;
+      if (row.__isSection || row.__isTitle) return false;
+      return String(row.taskName || "").trim() !== "";
+    }).length;
 
-  if (!respKey) {
-    canvas.parentElement.innerHTML =
-      '<div class="chart-empty">No "Responsibility" column found</div>';
-    return;
-  }
-
-  let troyerCount = 0;
-  let customerCount = 0;
-
-  rows.forEach((r) => {
-    const resp = String(r[respKey] || "")
-      .trim()
-      .toLowerCase();
-
-    if (!resp) return; // ignore empty
-
-    if (resp === "troyer") troyerCount++;
-    else if (resp === "customer") customerCount++;
+    return {
+      label: project.title || prettifyProjectName(project.sheet),
+      value: taskCount,
+    };
   });
+
+  items.sort((a, b) => b.value - a.value);
 
   chartInstances.engagements = new Chart(canvas, {
     type: "bar",
     data: {
-      labels: ["TROYER", "CUSTOMER"],
+      labels: items.map((x) => x.label),
       datasets: [
         {
-          label: "Tasks",
-          data: [troyerCount, customerCount],
-          backgroundColor: ["#2d7a4f", "#4f8ef7"],
+          label: "Schedule Tasks",
+          data: items.map((x) => x.value),
+          backgroundColor: "#4f8ef7",
           borderRadius: 8,
+          barPercentage: 0.72,
+          categoryPercentage: 0.82,
         },
       ],
     },
@@ -2103,21 +3710,17 @@ function renderResponsibilityChart() {
       maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
-        title: {
-          display: true,
-          text: "Tasks by Responsibility",
-        },
       },
       scales: {
         y: {
           beginAtZero: true,
           ticks: { precision: 0 },
-          title: { display: true, text: "Number of Tasks" },
         },
       },
     },
   });
 }
+
 
 function renderEngagementReportChart() {
   const canvas = el("statusChart");
@@ -2568,7 +4171,6 @@ function mountToolbarButtons() {
   ganttBtn.textContent = "Gantt";
   ganttBtn.style.display = "none";
   ganttBtn.onclick = async () => {
-    // Ensure schedule data exists
     if (!store.allSchedule?.length) await loadAllData();
     await navigate("gantt", { pushHash: true });
   };
@@ -2603,12 +4205,6 @@ function mountToolbarButtons() {
   zoomWrap.appendChild(zoomLabel);
   zoomWrap.appendChild(zoomSel);
 
-  const downloadBtn = document.createElement("button");
-  downloadBtn.id = "btnDownloadExcel";
-  downloadBtn.className = "btn ghost btn-sm";
-  downloadBtn.textContent = "Download Excel";
-  downloadBtn.onclick = () => (window.location.href = `${API}/excel/download`);
-
   const addBtn = document.createElement("button");
   addBtn.id = "btnAddRow";
   addBtn.className = "btn primary btn-sm";
@@ -2618,7 +4214,6 @@ function mountToolbarButtons() {
   wrap.appendChild(backBtn);
   wrap.appendChild(ganttBtn);
   wrap.appendChild(zoomWrap);
-  wrap.appendChild(downloadBtn);
   wrap.appendChild(addBtn);
 
   right.prepend(wrap);
@@ -2642,7 +4237,6 @@ function renderStats() {
   if (store.view === "schedule") {
     const rows = store.data;
 
-    // find status column name safely (status / phase)
     const sample = rows[0] || {};
     const statusKey =
       Object.keys(sample).find((k) => /status|phase/i.test(k)) || "status";
@@ -2794,10 +4388,9 @@ function renderTable() {
   const cfg = views[store.view];
   const cols = cfg.columns || [];
   const term = store.globalSearch.trim().toLowerCase();
-  const sheet = SHEET_MAP[store.view];
+  const sheet = getSheetForView(store.view);
   const showActions = store.view !== "overview" && !!sheet;
 
-  const isSchedule = store.view === "schedule";
   const thead =
     document.getElementById("theadSchedule") ||
     document.getElementById("theadDefault");
@@ -2822,6 +4415,7 @@ function renderTable() {
       .map((col) => {
         const sortable = col.sortable !== false;
         const isSorted = store.sortCol === col.key;
+
         const cls = [
           sortable ? "sortable" : "",
           isSorted && store.sortDir === "asc" ? "sort-asc" : "",
@@ -2829,6 +4423,7 @@ function renderTable() {
         ]
           .filter(Boolean)
           .join(" ");
+
         return `<th class="${cls}" data-sort="${sortable ? col.key : ""}">${esc(col.label)}</th>`;
       })
       .join("")}${showActions ? `<th>Actions</th>` : ""}</tr>`;
@@ -2854,6 +4449,12 @@ function renderTable() {
 
   tbody.innerHTML = paged
     .map((row) => {
+      const isToolChild =
+        store.view === "tools" &&
+        String(row.__rowType ?? "")
+          .trim()
+          .toLowerCase() === "child";
+
       const tds = cols
         .map((col) => {
           const raw = row[col.key] ?? "";
@@ -2879,7 +4480,10 @@ function renderTable() {
             return `<td class="mono sch-pct">${esc(formatSchedulePercent(raw))}</td>`;
           }
 
-          if (store.view === "schedule" && kLower === "duration") {
+          if (
+            store.view === "schedule" &&
+            (kLower === "duration" || kLower === "duration (days)")
+          ) {
             const startV = row[findKey(row, /^start$/i) || "Start"];
             const finV = row[findKey(row, /^finish$/i) || "Finish"];
             return `<td class="mono">${esc(formatScheduleDuration(raw, startV, finV))}</td>`;
@@ -2889,22 +4493,42 @@ function renderTable() {
             return `<td class="sch-task">${scheduleNameCellHTML(row)}</td>`;
           }
 
+          if (store.view === "tools") {
+            if (kLower === "s.n" || kLower === "sn" || kLower === "s n") {
+              return `<td class="mono">${isToolChild ? "" : esc(raw)}</td>`;
+            }
+
+            if (kLower === "item") {
+              return `<td class="${isToolChild ? "tool-child-item" : "tool-parent-item"}">
+                ${
+                  isToolChild
+                    ? `<span class="tool-child-label">↳ ${highlight(raw, term)}</span>`
+                    : highlight(raw, term)
+                }
+              </td>`;
+            }
+          }
+
           if (col.type === "date") {
             return `<td class="mono">${esc(formatDateShort(raw))}</td>`;
           }
 
-          return col.type === "number"
-            ? `<td class="mono">${esc(raw)}</td>`
-            : `<td>${highlight(raw, term)}</td>`;
+          if (col.type === "number") {
+            return `<td class="mono">${esc(raw)}</td>`;
+          }
+
+          return `<td>${highlight(raw, term)}</td>`;
         })
         .join("");
 
       const rowId =
         store.view === "sites"
           ? row.Location || row.location || ""
-          : store.view === "schedule"
-            ? (row.ID ?? row.Id ?? row.id ?? "")
-            : row.id || "";
+          : store.view === "schedule" || store.view === "gantt"
+            ? (row.id ?? "")
+            : store.view === "tools"
+              ? (row.__rowKey ?? row.id ?? row["S.N"] ?? "")
+              : row.id || "";
 
       const actions = showActions
         ? `<td class="mono">
@@ -2918,7 +4542,7 @@ function renderTable() {
           </td>`
         : "";
 
-      return `<tr>${tds}${actions}</tr>`;
+      return `<tr class="${isToolChild ? "tool-child-row" : ""}">${tds}${actions}</tr>`;
     })
     .join("");
 }
@@ -2960,7 +4584,7 @@ async function setView(view) {
 
   if (overviewView)
     overviewView.style.display = view === "overview" ? "" : "none";
-  if (tableView) tableView.style.display = view === "overview" ? "none" : "";
+  // tableView display is managed by applyViewLayout — no override needed here
 
   localStorage.setItem("activeView", view);
 
@@ -2972,6 +4596,14 @@ async function setView(view) {
 
   await loadCurrentViewData();
   render();
+}
+const navExportBtn = document.getElementById("btnExportExcel");
+if (navExportBtn) {
+  navExportBtn.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    await downloadExcelExport();
+  });
 }
 
 function applyFiltersFromPanel() {
@@ -2999,17 +4631,42 @@ let currentFormMode = "add";
 let currentFormId = null;
 
 function openFormModal(mode, rowId = null) {
-  const sheet = SHEET_MAP[store.view];
+  const sheet =
+    store.view === "schedule" || store.view === "gantt"
+      ? store.activeScheduleSheet
+      : getSheetForView(store.view);
   if (!sheet) return;
 
-  const cols = views[store.view].columns.filter((c) => {
-  if (c.key === "createdAt" || c.key === "updatedAt") return false;
+  let cols;
 
-  if (store.view === "schedule" && /^id$/i.test(String(c.key))) return false;
-  if (c.key === "id") return false;
+  if (store.view === "schedule" || store.view === "gantt") {
+    cols = [
+      { key: "taskName", label: "Task Name", type: "text" },
+      { key: "completion", label: "% Completion", type: "number" },
+      { key: "duration", label: "Duration", type: "number" },
+      { key: "startDate", label: "Start Date", type: "date" },
+      { key: "endDate", label: "End Date", type: "date" },
+      { key: "remarks", label: "Remarks", type: "text" },
+    ];
+  } else {
+    cols = views[store.view].columns.filter((c) => {
+      const key = String(c.key || "")
+        .trim()
+        .toLowerCase();
 
-  return true;
-});
+      if (key === "createdat" || key === "updatedat") return false;
+      if (key === "id") return false;
+
+      if (
+        store.view === "tools" &&
+        (key === "s.n" || key === "sn" || key === "s n")
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+  }
 
   if (!cols.length) {
     toast("error", "No columns found", "Check your data structure");
@@ -3020,7 +4677,6 @@ function openFormModal(mode, rowId = null) {
   const title = el("modalTitle");
   const formFields = el("formFields");
   const submitBtn = el("submitBtnText");
-  const form = el("modalForm");
 
   currentFormMode = mode;
   currentFormId = rowId;
@@ -3047,13 +4703,12 @@ function openFormModal(mode, rowId = null) {
                   .trim()
                   .toLowerCase() === String(rowId).trim().toLowerCase(),
             )
-          : store.view === "schedule"
-            ? store.data.find((r) => {
-                const rid = String(rowId).trim();
-                const a = r.id ?? r.ID ?? r.Id ?? "";
-                return String(a).trim() === rid;
-              })
-            : store.data.find((r) => String(r.id) === String(rowId))) || {}
+          : store.view === "schedule" || store.view === "gantt"
+            ? store.data.find(
+                (r) => String(r.id || "").trim() === String(rowId).trim(),
+              )
+            : store.data.find((r) => String(r.id || "") === String(rowId))) ||
+        {}
       : {};
 
   formFields.className =
@@ -3061,6 +4716,9 @@ function openFormModal(mode, rowId = null) {
 
   const isEng = store.view === "engagements";
   const isSch = store.view === "schedule";
+  const isTools = store.view === "tools";
+  const toolParents = isTools ? getToolsParentRows() : [];
+
   const sites = isEng ? getSiteNames() : [];
   const employees = isEng ? getEmployeesForPicker() : [];
 
@@ -3068,21 +4726,19 @@ function openFormModal(mode, rowId = null) {
     String(k || "")
       .toLowerCase()
       .replace(/[\s_]+/g, "");
+
   const isEmpIdKey = (k) =>
     /(^empid$)|(^employeeid$)|employee.*id/.test(keyNorm(k));
-  const isStartKey = (k) =>
-    /(^startdate$)|(^startingdate$)|start.*date/.test(keyNorm(k));
-  const isEndKey = (k) => /(^enddate$)|end.*date/.test(keyNorm(k));
-  const isDurationKey = (k) => /duration/.test(keyNorm(k));
+  const isStartKey = (k) => keyNorm(k) === "startdate";
+  const isEndKey = (k) => keyNorm(k) === "enddate";
+  const isDurationKey = (k) => keyNorm(k) === "duration";
 
   const toISODateInput = (val) => {
     if (!val) return "";
     const s = String(val).trim();
 
-    // if already YYYY-MM-DD
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
 
-    // try mm/dd/yyyy
     const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (m) {
       const mm = String(m[1]).padStart(2, "0");
@@ -3090,7 +4746,6 @@ function openFormModal(mode, rowId = null) {
       return `${m[3]}-${mm}-${dd}`;
     }
 
-    // fallback Date parse
     const d = new Date(s);
     if (isNaN(d.getTime())) return "";
     return d.toISOString().slice(0, 10);
@@ -3115,20 +4770,22 @@ function openFormModal(mode, rowId = null) {
 
   const listId = `emp_list_${Math.random().toString(16).slice(2)}`;
 
-  formFields.innerHTML = cols
-    .map((col) => {
-      const rawValue = currentRow[col.key] ?? "";
-      const value = String(rawValue ?? "");
-      const k = col.key;
+  formFields.innerHTML =
+    cols
+      .map((col) => {
+        const rawValue = currentRow[col.key] ?? "";
+        const value = String(rawValue ?? "");
+        const k = col.key;
 
-      const isTextArea =
-        String(k).toLowerCase().includes("description") ||
-        String(k).toLowerCase().includes("notes");
+        const isTextArea =
+          String(k).toLowerCase().includes("description") ||
+          String(k).toLowerCase().includes("notes") ||
+          String(k).toLowerCase().includes("remarks");
 
-      const fullWidth = isTextArea;
+        const fullWidth = isTextArea;
 
-      if (isEng && isEmployeeNameKey(k)) {
-        return `
+        if (isEng && isEmployeeNameKey(k)) {
+          return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
           <label class="form-label required" for="field_${esc(k)}">${esc(col.label)}</label>
           <input
@@ -3155,11 +4812,11 @@ function openFormModal(mode, rowId = null) {
           </datalist>
           <span class="form-error">This field is required</span>
         </div>`;
-      }
+        }
 
-      if (isEng && isSiteKey(k)) {
-        const current = String(value || "").trim();
-        return `
+        if (isEng && isSiteKey(k)) {
+          const current = String(value || "").trim();
+          return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
           <label class="form-label required" for="field_${esc(k)}">${esc(col.label)}</label>
           <select id="field_${esc(k)}" name="${esc(k)}" class="form-select" required>
@@ -3173,13 +4830,13 @@ function openFormModal(mode, rowId = null) {
           </select>
           <span class="form-error">This field is required</span>
         </div>`;
-      }
+        }
 
-      if (isEng && isStatusKey(k)) {
-        const v = String(value || "")
-          .trim()
-          .toLowerCase();
-        return `
+        if (isEng && isStatusKey(k)) {
+          const v = String(value || "")
+            .trim()
+            .toLowerCase();
+          return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
           <label class="form-label required" for="field_${esc(k)}">${esc(col.label)}</label>
           <select id="field_${esc(k)}" name="${esc(k)}" class="form-select" required>
@@ -3189,14 +4846,14 @@ function openFormModal(mode, rowId = null) {
           </select>
           <span class="form-error">This field is required</span>
         </div>`;
-      }
+        }
 
-      if (store.view === "sites" && isStatusKey(k)) {
-        const v = String(value || "")
-          .trim()
-          .toLowerCase();
-        const isSelected = (x) => v === String(x).toLowerCase();
-        return `
+        if (store.view === "sites" && isStatusKey(k)) {
+          const v = String(value || "")
+            .trim()
+            .toLowerCase();
+          const isSelected = (x) => v === String(x).toLowerCase();
+          return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
           <label class="form-label required" for="field_${esc(k)}">${esc(col.label)}</label>
           <select id="field_${esc(k)}" name="${esc(k)}" class="form-select" required>
@@ -3208,17 +4865,17 @@ function openFormModal(mode, rowId = null) {
           </select>
           <span class="form-error">This field is required</span>
         </div>`;
-      }
+        }
 
-      if (isSch && isStatusKey(k)) {
-        const v =
-          mode === "add"
-            ? "tbd"
-            : String(value || "")
-                .trim()
-                .toLowerCase();
-        const isSelected = (x) => v === String(x).toLowerCase();
-        return `
+        if (isSch && isStatusKey(k)) {
+          const v =
+            mode === "add"
+              ? "tbd"
+              : String(value || "")
+                  .trim()
+                  .toLowerCase();
+          const isSelected = (x) => v === String(x).toLowerCase();
+          return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
           <label class="form-label required" for="field_${esc(k)}">${esc(col.label)}</label>
           <select id="field_${esc(k)}" name="${esc(k)}" class="form-select" required>
@@ -3231,12 +4888,12 @@ function openFormModal(mode, rowId = null) {
           </select>
           <span class="form-error">This field is required</span>
         </div>`;
-      }
+        }
 
-      if (isEng && (isStartKey(k) || isEndKey(k))) {
-        const iso = toISODateInput(value);
-        const isEnd = isEndKey(k);
-        return `
+        if (isEng && (isStartKey(k) || isEndKey(k))) {
+          const iso = toISODateInput(value);
+          const isEnd = isEndKey(k);
+          return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
           <label class="form-label ${isEnd ? "" : "required"}" for="field_${esc(k)}">${esc(col.label)}</label>
           <input
@@ -3249,12 +4906,12 @@ function openFormModal(mode, rowId = null) {
           />
           ${isEnd ? "" : `<span class="form-error">This field is required</span>`}
         </div>`;
-      }
+        }
 
-      if (isSch && (isStartKey(k) || isEndKey(k))) {
-        const iso = toISODateInput(value);
-        const isEnd = isEndKey(k);
-        return `
+        if (isSch && (isStartKey(k) || isEndKey(k))) {
+          const iso = toISODateInput(value);
+          const isEnd = isEndKey(k);
+          return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
           <label class="form-label ${isEnd ? "" : "required"}" for="field_${esc(k)}">${esc(col.label)}</label>
           <input
@@ -3267,10 +4924,10 @@ function openFormModal(mode, rowId = null) {
           />
           ${isEnd ? "" : `<span class="form-error">This field is required</span>`}
         </div>`;
-      }
+        }
 
-      if (isSch && isDurationKey(k)) {
-        return `
+        if (isSch && isDurationKey(k)) {
+          return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
           <label class="form-label" for="field_${esc(k)}">${esc(col.label)}</label>
           <input
@@ -3283,10 +4940,10 @@ function openFormModal(mode, rowId = null) {
             placeholder="Auto"
           />
         </div>`;
-      }
+        }
 
-      if (isEng && isDurationKey(k)) {
-        return `
+        if (isEng && isDurationKey(k)) {
+          return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
           <label class="form-label" for="field_${esc(k)}">${esc(col.label)}</label>
           <input
@@ -3299,10 +4956,10 @@ function openFormModal(mode, rowId = null) {
             placeholder="Auto"
           />
         </div>`;
-      }
+        }
 
-      if (isEng && isEmpIdKey(k)) {
-        return `
+        if (isEng && isEmpIdKey(k)) {
+          return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
           <label class="form-label required" for="field_${esc(k)}">${esc(col.label)}</label>
           <input
@@ -3317,38 +4974,42 @@ function openFormModal(mode, rowId = null) {
           />
           <span class="form-error">This field is required</span>
         </div>`;
-      }
+        }
 
-      if (col.type === "date") {
-        const iso = toISODateInput(value);
-        return `
+        if (col.type === "date") {
+          const iso = toISODateInput(value);
+          return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
           <label class="form-label" for="field_${esc(k)}">${esc(col.label)}</label>
           <input type="date" id="field_${esc(k)}" name="${esc(k)}" class="form-input" value="${esc(iso)}" />
         </div>`;
-      }
+        }
 
-      if (col.type === "number") {
-        return `
+        if (col.type === "number") {
+          return `
         <div class="form-group ${fullWidth ? "full-width" : ""}">
           <label class="form-label" for="field_${esc(k)}">${esc(col.label)}</label>
           <input type="number" id="field_${esc(k)}" name="${esc(k)}" class="form-input" value="${esc(value)}" step="any" />
         </div>`;
-      }
+        }
 
-      if (isTextArea) {
-        return `
+        if (isTextArea) {
+          return `
         <div class="form-group full-width">
           <label class="form-label" for="field_${esc(k)}">${esc(col.label)}</label>
           <textarea id="field_${esc(k)}" name="${esc(k)}" class="form-textarea" placeholder="Enter ${esc(col.label).toLowerCase()}...">${esc(value)}</textarea>
         </div>`;
-      }
+        }
 
-      const required =
-        String(k).toLowerCase().includes("name") ||
-        String(k).toLowerCase().includes("title");
+        const required =
+          String(k).toLowerCase().includes("name") ||
+          String(k).toLowerCase().includes("title") ||
+          (isTools &&
+            ["item", "uom", "qty", "location"].includes(
+              String(k).trim().toLowerCase(),
+            ));
 
-      return `
+        return `
       <div class="form-group ${fullWidth ? "full-width" : ""}">
         <label class="form-label ${required ? "required" : ""}" for="field_${esc(k)}">${esc(col.label)}</label>
         <input
@@ -3362,10 +5023,64 @@ function openFormModal(mode, rowId = null) {
         />
         ${required ? `<span class="form-error">This field is required</span>` : ""}
       </div>`;
-    })
-    .join("");
+      })
+      .join("") +
+    (isTools
+      ? `
+      <div class="form-group full-width">
+        <label class="form-label" style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+          <input
+            type="checkbox"
+            id="field___isChild"
+            name="__isChild"
+            value="true"
+            ${
+              String(currentRow.__rowType ?? "")
+                .trim()
+                .toLowerCase() === "child"
+                ? "checked"
+                : ""
+            }
+          />
+          <span>This is a child row</span>
+        </label>
+      </div>
 
-  // Show modal
+      <div
+        class="form-group full-width"
+        id="toolsParentWrap"
+        style="display:none;"
+      >
+        <label class="form-label required" for="field___parentSn">Parent Item</label>
+        <select id="field___parentSn" name="__parentSn" class="form-select">
+          <option value="">Select parent item...</option>
+          ${getToolsParentRows()
+            .filter((r) => {
+              const currentSn = String(currentRow["S.N"] ?? "").trim();
+              const parentSn = String(r["S.N"] ?? "").trim();
+
+              if (!parentSn) return false;
+
+              if (mode === "edit" && currentSn && parentSn === currentSn) {
+                return false;
+              }
+
+              return true;
+            })
+            .map((r) => {
+              const sn = String(r["S.N"] ?? "").trim();
+              const item = String(r["Item"] ?? "").trim();
+              const selected =
+                String(currentRow.__parentSn ?? "").trim() === sn
+                  ? "selected"
+                  : "";
+              return `<option value="${esc(sn)}" ${selected}>${esc(sn)} - ${esc(item)}</option>`;
+            })
+            .join("")}
+        </select>
+        <span class="form-error">Please select parent item</span>
+      </div>`
+      : "");
   modal.style.display = "flex";
   document.body.style.overflow = "hidden";
 
@@ -3459,7 +5174,6 @@ function openFormModal(mode, rowId = null) {
     if (startEl) startEl.addEventListener("change", recomputeDuration);
     if (endEl) endEl.addEventListener("change", recomputeDuration);
 
-    // init
     applyStatusRules();
     recomputeDuration();
 
@@ -3481,72 +5195,34 @@ function openFormModal(mode, rowId = null) {
     );
 
     const startEl = inputs.find(
-      (x) => x.tagName === "INPUT" && isStartKey(x.name),
+      (x) => x.tagName === "INPUT" && x.name === "startDate",
     );
-    const endEl = inputs.find((x) => x.tagName === "INPUT" && isEndKey(x.name));
+    const endEl = inputs.find(
+      (x) => x.tagName === "INPUT" && x.name === "endDate",
+    );
     const durEl = inputs.find(
-      (x) => x.tagName === "INPUT" && isDurationKey(x.name),
-    );
-    const statusEl = inputs.find(
-      (x) => x.tagName === "SELECT" && isStatusKey(x.name),
+      (x) => x.tagName === "INPUT" && x.name === "duration",
     );
 
     if (durEl) durEl.readOnly = true;
 
-    const applyStatusRulesSch = () => {
-      if (!statusEl || !endEl) return;
-      const status = String(statusEl.value || "")
-        .trim()
-        .toLowerCase();
-
-      const lockEnd = status !== "completed";
-
-      if (lockEnd) {
-        endEl.value = "";
-        endEl.required = false;
-        endEl.classList.add("is-locked");
-        endEl.setAttribute("aria-disabled", "true");
-        endEl.tabIndex = -1;
-      } else {
-        endEl.required = true;
-        endEl.classList.remove("is-locked");
-        endEl.removeAttribute("aria-disabled");
-        endEl.tabIndex = 0;
-      }
-    };
-
     const recomputeDurationSch = () => {
-      if (!durEl || !startEl) return;
+      if (!durEl || !startEl || !endEl) return;
 
       const start = startEl.value;
-      if (!start) {
+      const end = endEl.value;
+
+      if (!start || !end) {
         durEl.value = "";
         return;
       }
 
-      const status = String(statusEl?.value || "")
-        .trim()
-        .toLowerCase();
-
-      if (status === "completed") {
-        const end = endEl ? endEl.value : "";
-        durEl.value = end ? daysBetweenInclusive(start, end) : "";
-      } else {
-        durEl.value = daysBetweenInclusive(start, todayISO());
-      }
+      durEl.value = daysBetweenInclusive(start, end);
     };
-
-    if (statusEl) {
-      statusEl.addEventListener("change", () => {
-        applyStatusRulesSch();
-        recomputeDurationSch();
-      });
-    }
 
     if (startEl) startEl.addEventListener("change", recomputeDurationSch);
     if (endEl) endEl.addEventListener("change", recomputeDurationSch);
 
-    applyStatusRulesSch();
     recomputeDurationSch();
 
     const timer = setInterval(() => {
@@ -3560,11 +5236,41 @@ function openFormModal(mode, rowId = null) {
       if (status !== "completed") recomputeDurationSch();
     }, 60000);
   }
-  // focus first field
-  setTimeout(() => {
-    const first = formFields.querySelector("input, select, textarea");
-    if (first) first.focus();
-  }, 50);
+
+  if (isTools) {
+    const childEl = formFields.querySelector("#field___isChild");
+    const parentWrapEl = formFields.querySelector("#toolsParentWrap");
+    const parentEl = formFields.querySelector("#field___parentSn");
+
+    const itemEl = formFields.querySelector('[name="Item"]');
+    const uomEl = formFields.querySelector('[name="UoM"]');
+    const qtyEl = formFields.querySelector('[name="Qty"]');
+    const locEl = formFields.querySelector('[name="Location"]');
+    const remarksEl = formFields.querySelector('[name="Remarks"]');
+
+    const syncToolsChildMode = () => {
+      const isChild = !!childEl?.checked;
+
+      if (parentWrapEl) parentWrapEl.style.display = isChild ? "" : "none";
+      if (parentEl) {
+        parentEl.required = isChild;
+        if (!isChild) parentEl.value = "";
+      }
+
+      if (itemEl)
+        itemEl.placeholder = isChild ? "Enter child item..." : "Enter item...";
+      if (uomEl) uomEl.placeholder = "Enter uom...";
+      if (qtyEl) qtyEl.placeholder = "Enter qty...";
+      if (locEl) locEl.placeholder = "Enter location...";
+      if (remarksEl)
+        remarksEl.placeholder = isChild
+          ? "Enter child remarks..."
+          : "Enter remarks...";
+    };
+
+    childEl?.addEventListener("change", syncToolsChildMode);
+    syncToolsChildMode();
+  }
 }
 
 function closeFormModal() {
@@ -3579,7 +5285,7 @@ function closeFormModal() {
 async function handleFormSubmit(e) {
   e.preventDefault();
 
-  const sheet = SHEET_MAP[store.view];
+  const sheet = getSheetForView(store.view);
   if (!sheet) return;
 
   const form = el("modalForm");
@@ -3589,7 +5295,25 @@ async function handleFormSubmit(e) {
   for (const [key, value] of formData.entries()) {
     data[key] = value;
   }
+  if (store.view === "schedule" || store.view === "gantt") {
+    const mapped = {
+      "Task Name": data.taskName ?? "",
+      "% Completion": data.completion ?? "",
+      Duration: data.duration ?? "",
+      "Start Date": data.startDate ?? "",
+      "End Date": data.endDate ?? "",
+      Remarks: data.remarks ?? "",
+    };
 
+    delete data.taskName;
+    delete data.completion;
+    delete data.duration;
+    delete data.startDate;
+    delete data.endDate;
+    delete data.remarks;
+
+    Object.assign(data, mapped);
+  }
   let hasError = false;
   qsa(".form-group").forEach((group) => {
     group.classList.remove("error");
@@ -3635,32 +5359,57 @@ async function handleFormSubmit(e) {
 
       delete data.id;
     }
+    if (store.view === "tools") {
+      delete data.id;
+      delete data.ID;
+      delete data.Id;
+      delete data["S.N"];
+      delete data["s.n"];
+
+      const isChild =
+        String(data.__isChild ?? "")
+          .trim()
+          .toLowerCase() === "true";
+
+      if (isChild && !String(data.__parentSn || "").trim()) {
+        throw new Error("Please select parent item for child row.");
+      }
+
+      if (!isChild) {
+        delete data.__parentSn;
+      }
+    }
 
     if (currentFormMode === "add") {
+      if (store.view === "schedule" || store.view === "gantt") {
+        delete data.ID;
+        delete data.Id;
+        delete data.id;
+      }
 
-  // ✅ schedule ONLY: never send any ID to backend
-  if (store.view === "schedule") {
-    delete data.ID;
-    delete data.Id;
-    delete data.id;
-  }
+      await apiCreateRow(
+        sheet,
+        store.view === "gantt" ? "schedule" : store.view,
+        data,
+      );
+      toast("success", "Record created successfully");
 
-  await apiCreateRow(sheet, store.view, data);
-  toast("success", "Record created successfully");
+      closeFormModal();
+      await loadCurrentViewData({ goToLastPage: true });
+      await loadAllData();
+    } else {
+      const updateId =
+        store.view === "sites"
+          ? data.Location || data.location || currentFormId
+          : currentFormId;
 
-} else {
-  const updateId =
-    store.view === "sites"
-      ? data.Location || data.location || currentFormId
-      : currentFormId;
+      await apiUpdateRow(sheet, updateId, data);
+      toast("success", "Record updated successfully");
 
-  await apiUpdateRow(sheet, updateId, data);
-  toast("success", "Record updated successfully");
-}
-
-    closeFormModal();
-    await loadCurrentViewData();
-    await loadAllData();
+      closeFormModal();
+      await loadCurrentViewData({ resetPage: false });
+      await loadAllData();
+    }
   } catch (e2) {
     toast("error", "Save failed", e2.message || "Unknown error");
   } finally {
@@ -3711,7 +5460,7 @@ document.addEventListener("click", async (e) => {
 
   const act = btn.dataset.act;
   const id = btn.dataset.id;
-  const sheet = SHEET_MAP[store.view];
+  const sheet = getSheetForView(store.view);
   if (!sheet) return;
 
   if (act === "export") {
@@ -3724,7 +5473,7 @@ document.addEventListener("click", async (e) => {
     try {
       await apiDeleteRow(sheet, id);
       toast("success", "Record deleted");
-      await loadCurrentViewData();
+      await loadCurrentViewData({ resetPage: false });
       await loadAllData();
     } catch (err) {
       toast("error", "Delete failed", err.message || "Unknown error");
@@ -3839,3 +5588,1238 @@ async function init() {
 document.addEventListener("DOMContentLoaded", () => {
   init().catch((err) => console.error("init failed:", err));
 });
+
+/* =========================
+   SMOOTH SCHEDULE OVERRIDES
+   ========================= */
+
+async function apiCreateScheduleProject(name) {
+  const res = await apiFetch(`${API}/excel/schedule-project`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) throw new Error(json.error || "Failed to create project");
+  return json;
+}
+
+function _smoothClassifyRow(row) {
+  if (row.__isSection) return "section";
+  if (row.__isTitle) return "sub";
+  const hasDates = !!(parseAnyDate(row.startDate) && parseAnyDate(row.endDate));
+  if (!hasDates) {
+    const t = String(row.taskName || "").trim();
+    if (t && t === t.toUpperCase() && t.replace(/\s/g, "").length > 1)
+      return "section";
+    if (t) return "sub";
+  }
+  return row.__highlight === "yellow" ? "highlight" : "task";
+}
+
+function _smoothBuildTimeline(rows) {
+  const dated = rows
+    .map((r) => {
+      const s = parseAnyDate(r.startDate);
+      let e = parseAnyDate(r.endDate);
+      if (!e && s && String(r.duration || "").trim()) {
+        const n = Number(String(r.duration).replace(/[^\d.-]/g, ""));
+        if (Number.isFinite(n) && n > 0) {
+          e = new Date(s);
+          e.setDate(e.getDate() + Math.max(0, Math.round(n) - 1));
+        }
+      }
+      return { row: r, start: s, end: e };
+    })
+    .filter((x) => x.start && x.end);
+
+  if (!dated.length)
+    return { days: [], min: null, max: null, todayIdx: -1, datedRows: [] };
+
+  let min = dated[0].start,
+    max = dated[0].end;
+  dated.forEach((x) => {
+    if (x.start < min) min = x.start;
+    if (x.end > max) max = x.end;
+  });
+  min = new Date(min);
+  min.setDate(min.getDate() - 2);
+  max = new Date(max);
+  max.setDate(max.getDate() + 2);
+
+  const days = [];
+  const cursor = new Date(min);
+  while (cursor <= max) {
+    days.push(new Date(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayIdx = days.findIndex((d) => d.getTime() === today.getTime());
+  return { days, min, max, todayIdx, datedRows: dated };
+}
+
+function _smoothMonthGroups(days) {
+  const out = [];
+  const M = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  let cur = null;
+  days.forEach((d) => {
+    const k = `${M[d.getMonth()]}-${String(d.getFullYear()).slice(-2)}`;
+    if (!cur || cur.k !== k) {
+      cur = { k, label: k, count: 0 };
+      out.push(cur);
+    }
+    cur.count++;
+  });
+  return out;
+}
+
+/* ─── New-Project Modal (proper form, replaces prompt) ─────── */
+(function _mountNewProjectModal() {
+  if (document.getElementById("npOverlay")) return;
+
+  const html = `
+<div id="npOverlay" class="np-overlay" role="dialog" aria-modal="true" aria-labelledby="npTitle">
+  <div class="np-card">
+    <h2 class="np-title" id="npTitle">Create New Project</h2>
+    <p class="np-desc">Enter a name — an empty Gantt chart will be created automatically.</p>
+    <div class="np-field-group">
+      <label for="npNameInput">Project Name <span style="color:#c62828">*</span></label>
+      <input id="npNameInput" class="np-input" type="text" maxlength="80"
+             placeholder="e.g. Upper Myagdi-2 (HPP)" autocomplete="off"/>
+      <span class="np-err" id="npNameErr">Please enter a project name.</span>
+    </div>
+    <div class="np-footer">
+      <button type="button" class="np-btn cancel" id="npCancel">Cancel</button>
+      <button type="button" class="np-btn create" id="npCreate">Create Project</button>
+    </div>
+  </div>
+</div>`;
+
+  document.body.insertAdjacentHTML("beforeend", html);
+
+  const overlay = document.getElementById("npOverlay");
+  const nameInput = document.getElementById("npNameInput");
+  const nameErr = document.getElementById("npNameErr");
+  const createBtn = document.getElementById("npCreate");
+  const cancelBtn = document.getElementById("npCancel");
+
+  function openModal() {
+    nameInput.value = "";
+    nameInput.classList.remove("error");
+    nameErr.classList.remove("show");
+    createBtn.disabled = false;
+    createBtn.textContent = "Create Project";
+    overlay.classList.add("open");
+    document.body.style.overflow = "hidden";
+    setTimeout(() => nameInput.focus(), 60);
+  }
+  function closeModal() {
+    overlay.classList.remove("open");
+    document.body.style.overflow = "";
+  }
+
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeModal();
+  });
+  cancelBtn.addEventListener("click", closeModal);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && overlay.classList.contains("open")) closeModal();
+  });
+
+  async function doCreate() {
+    const name = nameInput.value.trim();
+    if (!name) {
+      nameInput.classList.add("error");
+      nameErr.classList.add("show");
+      nameInput.focus();
+      return;
+    }
+
+    nameInput.classList.remove("error");
+    nameErr.classList.remove("show");
+    createBtn.disabled = true;
+    createBtn.textContent = "Creating…";
+
+    try {
+      const json = await apiCreateScheduleProject(name);
+      store.scheduleProjectSearch = "";
+      await refreshScheduleState(json.sheet, { resetPage: true });
+      closeModal();
+      toast("success", "Project created", `${name} is ready`);
+    } catch (err) {
+      toast("error", "Create project failed", err.message || "");
+      createBtn.disabled = false;
+      createBtn.textContent = "Create Project";
+    }
+  }
+
+  createBtn.addEventListener("click", doCreate);
+  nameInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") doCreate();
+  });
+
+  window._openNewProjectModal = openModal;
+})();
+const editProjectBtn = document.createElement("button");
+editProjectBtn.className = "btn ghost btn-sm";
+editProjectBtn.textContent = "Edit Project";
+
+const deleteProjectBtn = document.createElement("button");
+deleteProjectBtn.className = "btn ghost btn-sm";
+deleteProjectBtn.textContent = "Delete Project";
+
+editProjectBtn.addEventListener("click", async () => {
+  const active = store.activeScheduleSheet;
+  if (!active) return;
+
+  const current = getActiveScheduleProject();
+  const currentTitle =
+    current?.title || active.replace(/_Timeline$/i, "").replace(/_/g, " ");
+  const nextName = window.prompt("Rename project", currentTitle);
+
+  if (!nextName || !nextName.trim()) return;
+
+  try {
+    const json = await apiRenameScheduleProject(active, nextName.trim());
+
+    delete store.scheduleProjectCache?.[active];
+    await refreshScheduleState(json.sheet, { resetPage: true });
+    toast(
+      "success",
+      "Project renamed",
+      `${nextName.trim()} updated successfully`,
+    );
+  } catch (err) {
+    toast("error", "Rename failed", err.message || "");
+  }
+});
+
+deleteProjectBtn.addEventListener("click", async () => {
+  const active = store.activeScheduleSheet;
+  if (!active) return;
+
+  const current = getActiveScheduleProject();
+  const title = current?.title || active;
+
+  const ok = window.confirm(
+    `Delete project "${title}"?\n\nThis will remove the whole worksheet.`,
+  );
+  if (!ok) return;
+
+  try {
+    await apiDeleteScheduleProject(active);
+
+    delete store.scheduleProjectCache?.[active];
+    await loadScheduleProjects();
+    store.activeScheduleSheet = getActiveScheduleSheet();
+    saveActiveScheduleSheet(store.activeScheduleSheet);
+    await refreshScheduleState(store.activeScheduleSheet, { resetPage: true });
+
+    toast("success", "Project deleted", `${title} removed successfully`);
+  } catch (err) {
+    toast("error", "Delete failed", err.message || "");
+  }
+});
+
+function renderScheduleSheet() {
+  const mount = el("scheduleSheet");
+  const header = el("scheduleHeader");
+  if (!mount) return;
+  if (header) header.style.display = "none";
+
+  const projects = Array.isArray(store.scheduleProjects)
+    ? store.scheduleProjects
+    : [];
+  const activeSheet = getActiveScheduleSheet();
+  const activeProject =
+    projects.find((p) => p.sheet === activeSheet) || projects[0] || null;
+  const rows = Array.isArray(store.data) ? store.data : [];
+  const dayW = Number(store.ganttCellW || window.__smoothDayW || 22);
+
+  mount.innerHTML = "";
+  mount.style.cssText =
+    ""; /* Let body.is-schedule #scheduleSheet CSS class control layout */
+  const shell = document.createElement("div");
+  shell.className = "smooth-shell";
+  mount.appendChild(shell);
+
+  const top = document.createElement("div");
+  top.className = "smooth-topbar";
+  top.innerHTML = `<span class="smooth-label">Project</span>`;
+  const search = document.createElement("input");
+  search.className = "smooth-search";
+  search.placeholder = "Filter projects...";
+  search.value = store.scheduleProjectSearch || "";
+  const select = document.createElement("select");
+  select.className = "smooth-select";
+
+  const filtered = projects.filter(
+    (p) =>
+      !search.value.trim() ||
+      (p.title || p.sheet)
+        .toLowerCase()
+        .includes(search.value.trim().toLowerCase()),
+  );
+  const fillSelect = () => {
+    const items = projects.filter(
+      (p) =>
+        !search.value.trim() ||
+        (p.title || p.sheet)
+          .toLowerCase()
+          .includes(search.value.trim().toLowerCase()),
+    );
+    select.innerHTML = items
+      .map(
+        (p) =>
+          `<option value="${esc(p.sheet)}" ${p.sheet === activeSheet ? "selected" : ""}>${esc(p.title || p.sheet)}</option>`,
+      )
+      .join("");
+  };
+  fillSelect();
+  search.oninput = () => {
+    store.scheduleProjectSearch = search.value;
+    fillSelect();
+  };
+  select.onchange = async () => {
+    store.activeScheduleSheet = select.value;
+    delete store.scheduleProjectCache[select.value];
+    await loadCurrentViewData({ resetPage: true });
+  };
+
+  const addTask = document.createElement("button");
+  addTask.className = "btn primary btn-sm";
+  addTask.textContent = "Add Row";
+  addTask.onclick = () => _sgTask("add", null, getActiveScheduleSheet());
+
+  const addProject = document.createElement("button");
+  addProject.className = "btn ghost btn-sm";
+  addProject.textContent = "+ New Project";
+  addProject.onclick = () => _openNewProjectModal();
+
+  top.append(search, select, addTask, addProject);
+  shell.appendChild(top);
+
+  const h = document.createElement("div");
+  h.className = "smooth-head";
+  h.innerHTML = `<div><div class="smooth-title">${esc(activeProject ? activeProject.title : "Schedule")}</div><div class="smooth-sub">Sheet: ${esc(activeProject ? activeProject.sheet : activeSheet || "")}</div></div><div class="smooth-tag">${rows.length} tasks</div>`;
+  shell.appendChild(h);
+
+  const viewport = document.createElement("div");
+  viewport.className = "smooth-viewport";
+  shell.appendChild(viewport);
+
+  /* ── Bulletproof height: measure actual available space after paint ── */
+  function _setViewportHeight() {
+    const shellEl = viewport.parentElement; // smooth-shell
+    if (!shellEl) return;
+    const shellRect = shellEl.getBoundingClientRect();
+    const topbarEl = shellEl.querySelector(".smooth-topbar");
+    const headEl = shellEl.querySelector(".smooth-head");
+    const topbarH = topbarEl ? topbarEl.getBoundingClientRect().height : 0;
+    const headH = headEl ? headEl.getBoundingClientRect().height : 0;
+    const available = shellRect.height - topbarH - headH;
+    if (available > 80) {
+      viewport.style.height = available + "px";
+      viewport.style.flex = "none"; // let explicit height win
+    } else {
+      // fallback: measure from viewport bottom
+      const vTop = viewport.getBoundingClientRect().top;
+      const h = window.innerHeight - vTop - 4;
+      if (h > 80) {
+        viewport.style.height = h + "px";
+        viewport.style.flex = "none";
+      }
+    }
+  }
+  /* Run after layout + after any async paint */
+  requestAnimationFrame(() => {
+    _setViewportHeight();
+  });
+  setTimeout(_setViewportHeight, 80);
+  /* Re-run on window resize */
+  if (!window.__schedViewportResizeHandler) {
+    window.__schedViewportResizeHandler = () => {
+      document.querySelectorAll(".smooth-viewport").forEach((vp) => {
+        const shellEl = vp.parentElement;
+        if (!shellEl) return;
+        const shellRect = shellEl.getBoundingClientRect();
+        const topbarH = (
+          shellEl.querySelector(".smooth-topbar") || {
+            getBoundingClientRect: () => ({ height: 0 }),
+          }
+        ).getBoundingClientRect().height;
+        const headH = (
+          shellEl.querySelector(".smooth-head") || {
+            getBoundingClientRect: () => ({ height: 0 }),
+          }
+        ).getBoundingClientRect().height;
+        const available = shellRect.height - topbarH - headH;
+        if (available > 80) {
+          vp.style.height = available + "px";
+          vp.style.flex = "none";
+        } else {
+          const h = window.innerHeight - vp.getBoundingClientRect().top - 4;
+          if (h > 80) {
+            vp.style.height = h + "px";
+            vp.style.flex = "none";
+          }
+        }
+      });
+    };
+    window.addEventListener("resize", window.__schedViewportResizeHandler);
+  }
+
+  const leftCols = [
+    {
+      key: "taskName",
+      label: "TASK NAME /<br>MILESTONE",
+      width: 350,
+      align: "left",
+      fmt: (r) => r.taskName || "",
+    },
+    {
+      key: "duration",
+      label: "DURATION<br>(DAYS)",
+      width: 82,
+      align: "center",
+      fmt: (r) => r.duration || "",
+    },
+    {
+      key: "startDate",
+      label: "START<br>DATE",
+      width: 110,
+      align: "center",
+      fmt: (r) => _sgFD(r.startDate),
+    },
+    {
+      key: "endDate",
+      label: "FINISH<br>DATE",
+      width: 110,
+      align: "center",
+      fmt: (r) => _sgFD(r.endDate),
+    },
+    {
+      key: "remarks",
+      label: "NOTES /<br>SECTION",
+      width: 150,
+      align: "left",
+      fmt: (r) => r.remarks || "",
+    },
+    {
+      key: "__actions",
+      label: "ACTIONS",
+      width: 110,
+      align: "center",
+      fmt: null,
+    },
+  ];
+  const leftWidth = leftCols.reduce((a, c) => a + c.width, 0);
+
+  if (!rows.length) {
+    const emptyGrid = document.createElement("div");
+    emptyGrid.className = "smooth-grid";
+    emptyGrid.style.width = `${leftWidth + 600}px`;
+    emptyGrid.style.setProperty("--dayw", `${dayW}px`);
+    viewport.appendChild(emptyGrid);
+
+    const emptyHeaderWrap = document.createElement("div");
+    emptyHeaderWrap.className = "smooth-header-row";
+    emptyGrid.appendChild(emptyHeaderWrap);
+
+    const emptyLeftHead = document.createElement("div");
+    emptyLeftHead.className = "smooth-left";
+    emptyLeftHead.style.width = `${leftWidth}px`;
+    emptyHeaderWrap.appendChild(emptyLeftHead);
+
+    let rl = 0;
+    leftCols.forEach((col) => {
+      const cell = document.createElement("div");
+      cell.className = "smooth-hcell";
+      cell.style.width = `${col.width}px`;
+      cell.style.minWidth = `${col.width}px`;
+      cell.style.position = "sticky";
+      cell.style.left = `${rl}px`;
+      cell.style.zIndex = "16";
+      cell.innerHTML = col.label;
+      emptyLeftHead.appendChild(cell);
+      rl += col.width;
+    });
+
+    // Placeholder timeline header (6 months from today)
+    const emptyTlHead = document.createElement("div");
+    emptyTlHead.className = "smooth-timeline-head";
+    emptyTlHead.style.width = "600px";
+    emptyHeaderWrap.appendChild(emptyTlHead);
+
+    const today = new Date();
+    const M = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+    const phMonthRow = document.createElement("div");
+    phMonthRow.style.display = "flex";
+    for (let m = 0; m < 6; m++) {
+      const d = new Date(today.getFullYear(), today.getMonth() + m, 1);
+      const cell = document.createElement("div");
+      cell.className = "smooth-hcell smooth-month";
+      const daysInMonth = new Date(
+        d.getFullYear(),
+        d.getMonth() + 1,
+        0,
+      ).getDate();
+      const w = Math.min(daysInMonth * dayW, 100);
+      cell.style.width = `${w}px`;
+      cell.style.minWidth = `${w}px`;
+      cell.textContent = `${M[d.getMonth()]}-${String(d.getFullYear()).slice(-2)}`;
+      phMonthRow.appendChild(cell);
+    }
+    emptyTlHead.appendChild(phMonthRow);
+
+    const emptyMsg = document.createElement("div");
+    emptyMsg.className = "smooth-empty";
+    emptyMsg.innerHTML = `<svg style="margin-bottom:12px;opacity:.4" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg><br>No tasks yet. Click <strong>+ Add Row</strong> to add the first task.`;
+    viewport.appendChild(emptyMsg);
+
+    const rc = el("rowCount");
+    if (rc) rc.textContent = "0 rows";
+    return;
+  }
+
+  const timeline = _smoothBuildTimeline(rows);
+  const timelineWidth = Math.max(600, timeline.days.length * dayW);
+
+  const grid = document.createElement("div");
+  grid.className = "smooth-grid";
+  grid.style.width = `${leftWidth + timelineWidth}px`;
+  grid.style.setProperty("--dayw", `${dayW}px`);
+  viewport.appendChild(grid);
+
+  const headerWrap = document.createElement("div");
+  headerWrap.className = "smooth-header-row";
+  grid.appendChild(headerWrap);
+
+  const leftHead = document.createElement("div");
+  leftHead.className = "smooth-left";
+  leftHead.style.width = `${leftWidth}px`;
+  headerWrap.appendChild(leftHead);
+
+  let runningLeft = 0;
+  leftCols.forEach((col) => {
+    const cell = document.createElement("div");
+    cell.className = "smooth-hcell";
+    cell.style.width = `${col.width}px`;
+    cell.style.minWidth = `${col.width}px`;
+    cell.style.position = "sticky";
+    cell.style.left = `${runningLeft}px`;
+    cell.style.zIndex = "16";
+    cell.innerHTML = col.label;
+    leftHead.appendChild(cell);
+    runningLeft += col.width;
+  });
+
+  const timelineHead = document.createElement("div");
+  timelineHead.className = "smooth-timeline-head";
+  timelineHead.style.width = `${timelineWidth}px`;
+  headerWrap.appendChild(timelineHead);
+
+  const monthRow = document.createElement("div");
+  monthRow.style.display = "flex";
+  _smoothMonthGroups(timeline.days).forEach((g) => {
+    const d = document.createElement("div");
+    d.className = "smooth-hcell smooth-month";
+    d.style.width = `${g.count * dayW}px`;
+    d.style.minWidth = `${g.count * dayW}px`;
+    d.textContent = g.label.toUpperCase();
+    monthRow.appendChild(d);
+  });
+  timelineHead.appendChild(monthRow);
+
+  const dayRow = document.createElement("div");
+  dayRow.style.display = "flex";
+  timeline.days.forEach((d) => {
+    const c = document.createElement("div");
+    c.className = "smooth-hcell smooth-day";
+    c.style.width = `${dayW}px`;
+    c.style.minWidth = `${dayW}px`;
+    c.textContent = d.getDate();
+    dayRow.appendChild(c);
+  });
+  timelineHead.appendChild(dayRow);
+
+  rows.forEach((row, idx) => {
+    const cls = _smoothClassifyRow(row);
+    const line = document.createElement("div");
+    line.className = `smooth-row ${cls === "section" ? "is-section" : cls === "sub" ? "is-sub" : cls === "highlight" ? "is-highlight" : ""}`;
+    grid.appendChild(line);
+
+    const left = document.createElement("div");
+    left.className = "smooth-left";
+    left.style.width = `${leftWidth}px`;
+    line.appendChild(left);
+
+    let x = 0;
+    leftCols.forEach((col) => {
+      const cell = document.createElement("div");
+      cell.className = "smooth-cell";
+      cell.style.width = `${col.width}px`;
+      cell.style.minWidth = `${col.width}px`;
+      cell.style.position = "sticky";
+      cell.style.left = `${x}px`;
+      cell.style.zIndex = "6";
+      cell.style.justifyContent =
+        col.align === "center" ? "center" : "flex-start";
+
+      if (col.key === "__actions" && cls !== "section" && cls !== "sub") {
+        const acts = document.createElement("div");
+        acts.className = "smooth-actions";
+        acts.innerHTML = `<button class="smooth-act">Edit</button><button class="smooth-act del">Del</button>`;
+        const [eb, db] = acts.querySelectorAll("button");
+        eb.onclick = () => _sgTask("edit", row, activeSheet);
+        db.onclick = () => _sgDel(row, activeSheet);
+        cell.appendChild(acts);
+      } else {
+        const span = document.createElement("span");
+        span.className = "smooth-name";
+        span.textContent = col.fmt ? col.fmt(row) : "";
+        cell.appendChild(span);
+      }
+      left.appendChild(cell);
+      x += col.width;
+    });
+
+    const track = document.createElement("div");
+    track.className = "smooth-track is-week";
+    track.style.width = `${timelineWidth}px`;
+    line.appendChild(track);
+
+    if (timeline.todayIdx >= 0) {
+      const t = document.createElement("div");
+      t.className = "smooth-today";
+      t.style.left = `${timeline.todayIdx * dayW}px`;
+      track.appendChild(t);
+    }
+
+    const s = parseAnyDate(row.startDate);
+    let e = parseAnyDate(row.endDate);
+    if (!e && s && String(row.duration || "").trim()) {
+      const n = Number(String(row.duration).replace(/[^\d.-]/g, ""));
+      if (Number.isFinite(n) && n > 0) {
+        e = new Date(s);
+        e.setDate(e.getDate() + Math.max(0, Math.round(n) - 1));
+      }
+    }
+    if (s && e && timeline.min) {
+      const leftPx = Math.round((s - timeline.min) / 86400000) * dayW;
+      const widthPx = Math.max(1, Math.round((e - s) / 86400000) + 1) * dayW;
+      const bar = document.createElement("div");
+      bar.className = `smooth-bar ${cls === "highlight" ? "highlight" : cls === "section" ? "section" : cls === "sub" ? "sub" : ""}`;
+      bar.style.left = `${leftPx}px`;
+      bar.style.width = `${widthPx}px`;
+      track.appendChild(bar);
+    }
+  });
+
+  // Auto-scroll so today is roughly centred in the Gantt timeline
+  requestAnimationFrame(() => {
+    if (timeline.todayIdx >= 0) {
+      viewport.scrollLeft = Math.max(
+        0,
+        leftWidth + timeline.todayIdx * dayW - viewport.clientWidth * 0.45,
+      );
+    }
+  });
+
+  const rc = el("rowCount");
+  if (rc) rc.textContent = `${rows.length} rows`;
+}
+
+function openProjectModal() {
+  const overlay = document.getElementById("projectModalOverlay");
+  const input = document.getElementById("projectNameInput");
+  if (!overlay) return;
+  overlay.style.display = "flex";
+  document.body.style.overflow = "hidden";
+  if (input) {
+    input.value = "";
+    setTimeout(() => input.focus(), 0);
+  }
+}
+
+function closeProjectModal() {
+  const overlay = document.getElementById("projectModalOverlay");
+  const form = document.getElementById("projectModalForm");
+  if (!overlay) return;
+  overlay.style.display = "none";
+  document.body.style.overflow = "";
+  form?.reset();
+}
+
+document
+  .getElementById("projectModalClose")
+  ?.addEventListener("click", closeProjectModal);
+document
+  .getElementById("projectModalCancel")
+  ?.addEventListener("click", closeProjectModal);
+
+document
+  .getElementById("projectModalOverlay")
+  ?.addEventListener("click", (e) => {
+    if (e.target.id === "projectModalOverlay") closeProjectModal();
+  });
+document
+  .getElementById("projectModalForm")
+  ?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const input = document.getElementById("projectNameInput");
+    const name = String(input?.value || "").trim();
+    if (!name) return;
+
+    try {
+      const res = await apiFetch("/api/excel/schedule-project", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!json.ok) throw new Error(json.error || "Failed to create project");
+
+      closeProjectModal();
+      await loadScheduleProjects();
+
+      store.activeScheduleSheet = json.sheet;
+      await loadCurrentViewData({ resetPage: true });
+
+      toast("success", "Project created", `${name} is ready`);
+    } catch (err) {
+      toast("error", "Project create failed", err.message || "");
+    }
+  });
+
+function applyViewLayout() {
+  const isOverview = store.view === "overview";
+  const isSchedule = store.view === "schedule" || store.view === "gantt";
+
+  document.body.classList.toggle("is-schedule", isSchedule);
+
+  const overviewView = document.getElementById("overviewView");
+  const tableView = document.getElementById("tableView");
+  const scheduleLayout = document.getElementById("scheduleLayout");
+  const scheduleScroller = document.getElementById("scheduleScroller");
+  const scheduleSheet = document.getElementById("scheduleSheet");
+  const tableCard = document.querySelector("#tableView .table-card");
+  const tableToolbar = document.querySelector("#tableView .table-toolbar");
+  const stats = document.getElementById("stats");
+  const filterBar = document.getElementById("filterBar");
+  const advancedFilters = document.getElementById("advancedFilters");
+  const paginationBar = document.getElementById("paginationBar");
+  const defaultWrap = document.getElementById("defaultTableWrap");
+  const scheduleHeader = document.getElementById("scheduleHeader");
+  const btnOpenGantt = document.getElementById("btnOpenGantt");
+
+  [
+    tableView,
+    tableCard,
+    scheduleLayout,
+    scheduleScroller,
+    scheduleSheet,
+  ].forEach((el) => {
+    if (el) el.style.cssText = "";
+  });
+
+  if (overviewView) overviewView.style.display = isOverview ? "" : "none";
+  if (tableView) tableView.style.display = isOverview ? "none" : "";
+
+  if (isSchedule) {
+    // Explicitly set flex — #scheduleLayout starts as display:none in HTML
+    if (scheduleLayout) scheduleLayout.style.display = "flex";
+    if (scheduleScroller) scheduleScroller.style.display = "flex";
+    if (scheduleSheet) {
+      scheduleSheet.style.display = "flex";
+      scheduleSheet.classList.add("schedule-screen");
+    }
+    if (scheduleHeader) scheduleHeader.style.display = "none";
+    if (tableToolbar) tableToolbar.style.display = "";
+    if (stats) stats.style.display = "none";
+    if (filterBar) filterBar.style.display = "none";
+    if (advancedFilters) advancedFilters.style.display = "none";
+    if (paginationBar) paginationBar.style.display = "none";
+    if (defaultWrap) defaultWrap.style.display = "none";
+  } else {
+    if (scheduleSheet) {
+      scheduleSheet.style.display = "";
+      scheduleSheet.classList.remove("schedule-screen");
+    }
+    if (scheduleLayout) scheduleLayout.style.display = "none";
+    if (scheduleScroller) scheduleScroller.style.display = "";
+    if (scheduleHeader) scheduleHeader.style.display = "none";
+    if (tableCard) tableCard.style.display = isOverview ? "none" : "";
+    if (tableToolbar) tableToolbar.style.display = "";
+    if (defaultWrap) defaultWrap.style.display = !isOverview ? "" : "none";
+    if (stats) stats.style.display = "";
+    if (filterBar) filterBar.style.display = "";
+    if (advancedFilters) advancedFilters.style.display = "none";
+    if (paginationBar) paginationBar.style.display = "";
+  }
+  if (btnOpenGantt) btnOpenGantt.style.display = "none";
+}
+
+/* =========================
+   REVISED SCHEDULE UI OVERRIDES
+   ========================= */
+function _scheduleTimelineFromRows(rows) {
+  const dated = (Array.isArray(rows) ? rows : [])
+    .map((r) => {
+      const s = parseAnyDate(r.startDate);
+      let e = parseAnyDate(r.endDate);
+      if (!e && s && String(r.duration || "").trim()) {
+        const n = Number(String(r.duration).replace(/[^\d.-]/g, ""));
+        if (Number.isFinite(n) && n > 0) {
+          e = new Date(s);
+          e.setDate(e.getDate() + Math.max(0, Math.round(n) - 1));
+        }
+      }
+      return { row: r, start: s, end: e };
+    })
+    .filter((x) => x.start && x.end);
+
+  if (!dated.length) {
+    const base = new Date();
+    base.setHours(0, 0, 0, 0);
+    const min = new Date(base.getFullYear(), base.getMonth(), 1);
+    const max = new Date(base.getFullYear(), base.getMonth() + 2, 0);
+    return { min, max, days: _daysBetween(min, max), datedRows: [] };
+  }
+
+  let min = dated[0].start;
+  let max = dated[0].end;
+  for (const item of dated) {
+    if (item.start < min) min = item.start;
+    if (item.end > max) max = item.end;
+  }
+
+  min = new Date(min.getFullYear(), min.getMonth(), 1);
+  max = new Date(max.getFullYear(), max.getMonth() + 1, 0);
+  return { min, max, days: _daysBetween(min, max), datedRows: dated };
+}
+
+function _daysBetween(min, max) {
+  const out = [];
+  const cursor = new Date(min);
+  cursor.setHours(0, 0, 0, 0);
+  while (cursor <= max) {
+    out.push(new Date(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
+}
+
+function _scheduleMonthGroups(days) {
+  const M = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const out = [];
+  let current = null;
+  for (const d of days) {
+    const key = `${d.getFullYear()}-${d.getMonth()}`;
+    if (!current || current.key !== key) {
+      current = {
+        key,
+        label: `${M[d.getMonth()]}-${String(d.getFullYear()).slice(-2)}`,
+        count: 0,
+      };
+      out.push(current);
+    }
+    current.count += 1;
+  }
+  return out;
+}
+
+function _syncScheduleScroll(a, b) {
+  if (!a || !b) return;
+  let busy = false;
+  const sync = (src, dst) => {
+    src.addEventListener(
+      "scroll",
+      () => {
+        if (busy) return;
+        busy = true;
+        dst.scrollLeft = src.scrollLeft;
+        requestAnimationFrame(() => {
+          busy = false;
+        });
+      },
+      { passive: true },
+    );
+  };
+  sync(a, b);
+  sync(b, a);
+}
+
+function renderScheduleSheet() {
+  const mount = el("scheduleSheet");
+  const header = el("scheduleHeader");
+  if (!mount) return;
+  if (header) header.style.display = "none";
+
+  const projects = Array.isArray(store.scheduleProjects)
+    ? store.scheduleProjects
+    : [];
+  const activeSheet = getActiveScheduleSheet();
+  const activeProject =
+    projects.find((p) => p.sheet === activeSheet) || projects[0] || null;
+  const rows = Array.isArray(store.data) ? store.data : [];
+  const dayW = Math.max(
+    22,
+    Number(store.ganttCellW || window.__smoothDayW || 30),
+  );
+
+  mount.innerHTML = "";
+  mount.style.cssText = "";
+
+  const shell = document.createElement("div");
+  shell.className = "rev-schedule-shell";
+  mount.appendChild(shell);
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "rev-schedule-toolbar";
+  shell.appendChild(toolbar);
+
+  const toolbarLeft = document.createElement("div");
+  toolbarLeft.className = "rev-schedule-toolbar__left";
+  toolbar.appendChild(toolbarLeft);
+
+  const label = document.createElement("span");
+  label.className = "rev-schedule-label";
+  label.textContent = "Project";
+
+  const search = document.createElement("input");
+  search.className = "rev-schedule-search";
+  search.placeholder = "Filter projects...";
+  search.value = store.scheduleProjectSearch || "";
+
+  const select = document.createElement("select");
+  select.className = "rev-schedule-select";
+
+  const fillSelect = () => {
+    const q = String(search.value || "")
+      .trim()
+      .toLowerCase();
+    const items = projects.filter(
+      (p) =>
+        !q ||
+        String(p.title || p.sheet || "")
+          .toLowerCase()
+          .includes(q),
+    );
+    select.innerHTML = items
+      .map(
+        (p) =>
+          `<option value="${esc(p.sheet)}" ${p.sheet === activeSheet ? "selected" : ""}>${esc(p.title || p.sheet)}</option>`,
+      )
+      .join("");
+  };
+  fillSelect();
+  search.oninput = () => {
+    store.scheduleProjectSearch = search.value;
+    fillSelect();
+  };
+  select.onchange = async () => {
+    store.activeScheduleSheet = select.value;
+    await loadCurrentViewData({ resetPage: true });
+  };
+
+  toolbarLeft.append(label, search, select);
+
+  const toolbarRight = document.createElement("div");
+  toolbarRight.className = "rev-schedule-toolbar__right";
+  toolbar.appendChild(toolbarRight);
+
+  const addTask = document.createElement("button");
+  addTask.className = "btn primary btn-sm";
+  addTask.textContent = " Add Row";
+  addTask.onclick = () => _sgTask("add", null, getActiveScheduleSheet());
+
+  const addProject = document.createElement("button");
+  addProject.className = "rev-schedule-btn ghost";
+  addProject.textContent = "+ New Project";
+  addProject.onclick = () => _openNewProjectModal();
+
+  toolbarRight.append(editProjectBtn, deleteProjectBtn, addTask, addProject);
+
+  const meta = document.createElement("div");
+  meta.className = "rev-schedule-meta";
+  meta.innerHTML = `
+    <div>
+      <div class="rev-schedule-title">${esc(activeProject ? activeProject.title : "Schedule")}</div>
+      <div class="rev-schedule-sub">Sheet: ${esc(activeProject ? activeProject.sheet : activeSheet || "")}</div>
+    </div>
+    <div class="rev-schedule-chip">${rows.length} rows</div>
+  `;
+  shell.appendChild(meta);
+
+  const topScroll = document.createElement("div");
+  topScroll.className = "rev-top-scroll";
+  topScroll.innerHTML = '<div class="rev-top-scroll__inner"></div>';
+  shell.appendChild(topScroll);
+
+  const viewport = document.createElement("div");
+  viewport.className = "rev-schedule-viewport";
+  shell.appendChild(viewport);
+
+  const leftCols = [
+    {
+      key: "taskName",
+      label: "TASK NAME /<br>MILESTONE",
+      width: 350,
+      align: "left",
+      fmt: (r) => r.taskName || "",
+    },
+    {
+      key: "duration",
+      label: "DURATION<br>(DAYS)",
+      width: 72,
+      align: "center",
+      fmt: (r) => r.duration || "",
+    },
+    {
+      key: "startDate",
+      label: "START<br>DATE",
+      width: 84,
+      align: "center",
+      fmt: (r) => _sgFD(r.startDate),
+    },
+    {
+      key: "endDate",
+      label: "FINISH<br>DATE",
+      width: 84,
+      align: "center",
+      fmt: (r) => _sgFD(r.endDate),
+    },
+    {
+      key: "remarks",
+      label: "NOTES /<br>SECTION",
+      width: 130,
+      align: "left",
+      fmt: (r) => r.remarks || "",
+    },
+    {
+      key: "__actions",
+      label: "ACTIONS",
+      width: 106,
+      align: "center",
+      fmt: null,
+    },
+  ];
+  const leftWidth = leftCols.reduce((sum, col) => sum + col.width, 0);
+  const timeline = _scheduleTimelineFromRows(rows);
+  const timelineWidth = Math.max(1100, timeline.days.length * dayW);
+  const totalWidth = leftWidth + timelineWidth;
+  topScroll.firstElementChild.style.width = `${totalWidth}px`;
+
+  const grid = document.createElement("div");
+  grid.className = "rev-schedule-grid";
+  grid.style.width = `${totalWidth}px`;
+  viewport.appendChild(grid);
+
+  const headerRow = document.createElement("div");
+  headerRow.className = "rev-schedule-header-row";
+  grid.appendChild(headerRow);
+
+  const leftHeader = document.createElement("div");
+  leftHeader.className = "rev-schedule-left rev-schedule-left--head";
+  leftHeader.style.width = `${leftWidth}px`;
+  headerRow.appendChild(leftHeader);
+
+  let runningLeft = 0;
+  leftCols.forEach((col) => {
+    const cell = document.createElement("div");
+    cell.className = "rev-schedule-hcell";
+    cell.style.width = `${col.width}px`;
+    cell.style.minWidth = `${col.width}px`;
+    cell.style.left = `${runningLeft}px`;
+    cell.innerHTML = col.label;
+    leftHeader.appendChild(cell);
+    runningLeft += col.width;
+  });
+
+  const timelineHead = document.createElement("div");
+  timelineHead.className = "rev-schedule-timeline-head";
+  timelineHead.style.width = `${timelineWidth}px`;
+  headerRow.appendChild(timelineHead);
+
+  const monthsRow = document.createElement("div");
+  monthsRow.className = "rev-months-row";
+  _scheduleMonthGroups(timeline.days).forEach((group) => {
+    const cell = document.createElement("div");
+    cell.className = "rev-schedule-hcell rev-schedule-hcell--month";
+    cell.style.width = `${group.count * dayW}px`;
+    cell.style.minWidth = `${group.count * dayW}px`;
+    cell.textContent = group.label.toUpperCase();
+    monthsRow.appendChild(cell);
+  });
+  timelineHead.appendChild(monthsRow);
+
+  const daysRow = document.createElement("div");
+  daysRow.className = "rev-days-row";
+  timeline.days.forEach((d) => {
+    const cell = document.createElement("div");
+    cell.className = "rev-schedule-hcell rev-schedule-hcell--day";
+    cell.style.width = `${dayW}px`;
+    cell.style.minWidth = `${dayW}px`;
+    cell.textContent = d.getDate();
+    daysRow.appendChild(cell);
+  });
+  timelineHead.appendChild(daysRow);
+
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "rev-schedule-empty";
+    empty.innerHTML =
+      '<div class="rev-schedule-empty__title">No tasks yet</div><div class="rev-schedule-empty__sub">Use <strong>+ Add Row</strong> to add the first activity for this project.</div>';
+    shell.appendChild(empty);
+    _syncScheduleScroll(topScroll, viewport);
+    return;
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayIdx = timeline.days.findIndex(
+    (d) => d.getTime() === today.getTime(),
+  );
+
+  rows.forEach((row) => {
+    const kind = _smoothClassifyRow(row);
+    const rowEl = document.createElement("div");
+    rowEl.className = `rev-schedule-row ${kind === "section" ? "is-section" : kind === "sub" ? "is-sub" : kind === "highlight" ? "is-highlight" : ""}`;
+    grid.appendChild(rowEl);
+
+    const left = document.createElement("div");
+    left.className = "rev-schedule-left";
+    left.style.width = `${leftWidth}px`;
+    rowEl.appendChild(left);
+
+    let stickyLeft = 0;
+    leftCols.forEach((col) => {
+      const cell = document.createElement("div");
+      cell.className = "rev-schedule-cell";
+      cell.dataset.col = col.key;
+      cell.style.width = `${col.width}px`;
+      cell.style.minWidth = `${col.width}px`;
+      cell.style.left = `${stickyLeft}px`;
+      cell.style.justifyContent =
+        col.align === "center" ? "center" : "flex-start";
+
+      if (col.key === "__actions" && kind !== "section" && kind !== "sub") {
+        const acts = document.createElement("div");
+        acts.className = "rev-schedule-actions";
+        acts.innerHTML =
+          '<button class="rev-act-btn">Edit</button><button class="rev-act-btn del">Del</button>';
+        const [editBtn, delBtn] = acts.querySelectorAll("button");
+        editBtn.onclick = () => _sgTask("edit", row, activeSheet);
+        delBtn.onclick = () => deleteScheduleTaskRow(activeSheet, row);
+        cell.appendChild(acts);
+      } else {
+        const span = document.createElement("span");
+        span.className = "rev-schedule-cell__text";
+
+        if (
+          col.key === "startDate" ||
+          col.key === "endDate" ||
+          col.key === "duration"
+        ) {
+          span.style.whiteSpace = "nowrap";
+          span.style.overflow = "visible";
+          span.style.textOverflow = "clip";
+          span.style.fontSize = "12px";
+        }
+
+        span.textContent = col.fmt ? col.fmt(row) : "";
+        cell.appendChild(span);
+      }
+
+      left.appendChild(cell);
+      stickyLeft += col.width;
+    });
+
+    const timelineRow = document.createElement("div");
+    timelineRow.className = "rev-schedule-track";
+    timelineRow.style.width = `${timelineWidth}px`;
+    rowEl.appendChild(timelineRow);
+
+    if (todayIdx >= 0) {
+      const todayLine = document.createElement("div");
+      todayLine.className = "rev-schedule-today";
+      todayLine.style.left = `${todayIdx * dayW}px`;
+      timelineRow.appendChild(todayLine);
+    }
+
+    const start = parseAnyDate(row.startDate);
+    let end = parseAnyDate(row.endDate);
+    if (!end && start && String(row.duration || "").trim()) {
+      const n = Number(String(row.duration).replace(/[^\d.-]/g, ""));
+      if (Number.isFinite(n) && n > 0) {
+        end = new Date(start);
+        end.setDate(end.getDate() + Math.max(0, Math.round(n) - 1));
+      }
+    }
+
+    if (start && end && timeline.min) {
+      const leftPx = Math.round((start - timeline.min) / 86400000) * dayW;
+      const widthPx = Math.max(
+        dayW,
+        (Math.round((end - start) / 86400000) + 1) * dayW,
+      );
+      const bar = document.createElement("div");
+      bar.className = `rev-schedule-bar ${kind === "highlight" ? "highlight" : kind === "section" ? "section" : kind === "sub" ? "sub" : ""}`;
+      bar.style.left = `${leftPx}px`;
+      bar.style.width = `${widthPx}px`;
+      timelineRow.appendChild(bar);
+    }
+  });
+
+  _syncScheduleScroll(topScroll, viewport);
+
+  const firstDated = timeline.datedRows[0];
+  requestAnimationFrame(() => {
+    viewport.scrollLeft = 0;
+    topScroll.scrollLeft = 0;
+  });
+
+  const rc = el("rowCount");
+  if (rc) rc.textContent = `${rows.length} rows`;
+}
